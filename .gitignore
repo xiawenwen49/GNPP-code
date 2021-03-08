@@ -1,0 +1,29 @@
+
+# caches
+**/__pycache__/
+**/.pytest_cache
+**/.vscode
+**/*.egg-info
+**/.ipynb_checkpoints
+**/.DS_Store
+**/.idea
+
+
+# profiler output
+**/*.prof
+**/*.pdf
+
+
+# generated dataset files
+# e.g.
+**/*.SG
+**/data/
+
+
+# log
+**/log
+
+
+# ignore modules
+# e.g.
+
