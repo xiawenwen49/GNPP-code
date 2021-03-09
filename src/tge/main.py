@@ -69,10 +69,9 @@ def parse_args(argstring=None):
     # parser.add_argument('--out_features', type=int, default=6, help='number of target classes')
 
     # parser.add_argument('--time_encoder_type', type=str, default='tat', choices=['tat', 'harmonic', 'empty'], help='time encoder type')
-    # parser.add_argument('--time_encoder_maxt', type=float, default=3e6, help='time encoder maxt')
-    # parser.add_argument('--time_encoder_rows', type=int, default=int(1e6), help='time encoder rows')
+    parser.add_argument('--time_encoder_maxt', type=float, default=3e6, help='time encoder maxt')
+    parser.add_argument('--time_encoder_rows', type=int, default=int(1e6), help='time encoder rows')
     parser.add_argument('--time_encoder_dimension', type=int, default=128, help='time encoding dimension')
-    # parser.add_argument('--time_encoder_discrete', type=str, default='uniform', choices=['uniform', 'log'], help='discrete type')
     # parser.add_argument('--time_encoder_deltas', type=float, default=0.5, help='scale of mean time interval for discretization')
 
     # logging and debug
@@ -103,10 +102,11 @@ def main():
     G, embedding_matrix = utils.read_file(args.datadir, args.dataset) # read graph and embeddings
 
     # dataloaders
-    train_set, val_set, test_set = train_set, val_set, test_set = utils.get_dataset(G)
+    train_set, val_set, test_set = utils.get_dataset(G)
     dataloaders = utils.get_dataloader(train_set, val_set, test_set, args)
     
     # build model
+    args.time_encoder_args = {'dimension': args.time_encoder_dimension, 'maxt': args.time_encoder_maxt, 'rows': args.time_encoder_rows}
     model = get_model(G, embedding_matrix, args, logger)
 
     if args.eval != '':

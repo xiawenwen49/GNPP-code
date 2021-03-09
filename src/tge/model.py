@@ -2,6 +2,7 @@ import numpy as np
 import math
 import torch
 import torch.nn as nn
+from torch import Tensor
 from torch_geometric.nn import MessagePassing, GATConv
 from torch_geometric.nn.inits import glorot
 
@@ -9,6 +10,9 @@ class TimeEncoder(nn.Module):
     def __init__(self, *args, **kwargs):
         super(TimeEncoder, self).__init__()
         pass
+    def clip_weights(self):
+        pass
+
 
 class HarmonicEncoder(TimeEncoder):
     """ In paper 'Inductive representation learning on temporal graphs'
@@ -87,37 +91,62 @@ class HarmonicEncoder(TimeEncoder):
         # import ipdb; ipdb.set_trace()
         self.alpha.data.clamp_(1e-6, 1e8) # here should use im-place clamp
         # self.alpha = torch.nn.Parameter(self.alpha.clamp(1e-6, 1e8))
-    
-    # def sin_encoding_mean(self, ts):
-    #     """ ts should be t_1 - t_2 """
-    #     device = ts.device
-    #     self.basis_freq = self.basis_freq.to(device)
-    #     self.phase_sin = self.phase_sin.to(device)
 
-    #     batch_size = ts.size(0)
-    #     ts = ts.view(batch_size, 1)
 
-    #     map_ts = ts * self.basis_freq.view(1, -1)
-    #     harmonic_sin = torch.sin(map_ts + self.phase_sin.view(1, -1))
+class PositionEncoder(TimeEncoder):
+    """
+    discrete + position encoding
+    """
+    def __init__(self, maxt, rows: int = 50000, dimension: int = 128, **kwargs):
+        super(PositionEncoder, self).__init__()
+        self.maxt = maxt
+        self.rows = rows
+        self.deltat = maxt / rows
+        self.dimension = dimension
 
-    #     mean = torch.mean(harmonic_sin, axis=1)
+        self.timing_encoding_matrix = self.get_timing_encoding_matrix(rows, dimension) # on cpu
 
-    #     return mean
+    def forward(self, timestamps: Tensor):
+        device = timestamps.device
+        indexes = self.timestamps_to_indexes(timestamps)  # np array, on cpu
+        return torch.FloatTensor(self.timing_encoding_matrix[indexes]).to(device)  # to gpu
 
-        
+    def timestamps_to_indexes(self, timestamps: Tensor):
+        """ convert float tensor timestamps to long tensor indexes """
+        timestamps = timestamps.to('cpu').numpy()
+        indexes = (timestamps // self.deltat).astype(np.int)
+        indexes = np.clip(indexes, 0, self.rows - 1).astype(np.int)
+        return indexes
+
+    def get_timing_encoding_matrix(self, length, dimension, min_timescale=1.0, max_timescale=1.0e4, start_index=0):
+        """
+        https://kazemnejad.com/blog/transformer_architecture_positional_encoding/
+        """
+        assert dimension % 2 == 0, 'TAT time encoding dimension must be even'
+        T = np.arange(length).reshape((length, 1))
+        W_inv_log = np.arange(dimension // 2) * 2 / (dimension - 2) * np.log(
+            max_timescale)  # (dimension-2)就等价与tensorflow的实现。
+        W = 1 / np.exp(W_inv_log)
+
+        position_encodings = T @ W.reshape((1, dimension // 2))
+        position_encodings = np.concatenate([np.sin(position_encodings), np.cos(position_encodings)], axis=1)
+        position_encodings = torch.Tensor(position_encodings)  # [rows, dimension] torch tensor, requires_grad默认false
+
+        return position_encodings
+
 
 
 class TGN(nn.Module):
     """ Temporal graph event model """
-    def __init__(self, G, embedding_matrix, time_encoder_dimension, layers, in_channels, hidden_channels, out_channels, dropout):
+    def __init__(self, G, embedding_matrix, time_encoder_args, layers, in_channels, hidden_channels, out_channels, dropout):
         super(TGN, self).__init__()
         self.G = G
         self.edgelist = torch.LongTensor( np.concatenate( [np.array(G.edges(), dtype=np.int).T, np.array(G.edges(), dtype=np.int).T[[1, 0], :]], axis=1 ) )
         self.embedding = torch.nn.Embedding(embedding_matrix.shape[0], embedding_matrix.shape[1])
         self.embedding.weight = torch.nn.Parameter(torch.FloatTensor(embedding_matrix), requires_grad=True) # NOTE: test
-        self.time_encoder_dimension = time_encoder_dimension
-        self.time_encoder = HarmonicEncoder(time_encoder_dimension)
-
+        self.time_encoder_args = time_encoder_args
+        # self.time_encoder = HarmonicEncoder(time_encoder_args['dimension'])
+        self.time_encoder = PositionEncoder(time_encoder_args['maxt'], time_encoder_args['rows'], time_encoder_args['dimension'])
         
         self.layers = nn.ModuleList()
         for i in range(layers):
@@ -191,7 +220,7 @@ class TGNLayer(MessagePassing):
 
 def get_model(G, embedding_matrix, args, logger):
     if args.model == 'TGN':
-        model = TGN(G, embedding_matrix, args.time_encoder_dimension, args.layers, args.in_channels, args.hidden_channels, args.out_channels, args.dropout)
+        model = TGN(G, embedding_matrix, args.time_encoder_args, args.layers, args.in_channels, args.hidden_channels, args.out_channels, args.dropout)
     else:
         raise NotImplementedError("Not implemented now")
     return model

@@ -8,8 +8,10 @@ from torch.utils.data import DataLoader
 from torch.utils.data import Dataset
 
 
-# TODO: clarifty the dataset format
-# TODO: implement temporal graph event model.
+# COMPLETED: clarify the dataset format
+# COMPLETED: implement temporal graph event model.
+# TODO: add deterministic time encoder/position encoding
+# TODO: try GRU/LSTM based lambda function
 
 
 def compute_max_interval(edgearray):
@@ -85,16 +87,14 @@ def read_file(datadir, dataset, directed=False, preprocess=True, logger=None, re
     else: return G, embedding_matrix
 
 
-
 class EventDataset(Dataset):
     def __init__(self, G, name):
         self.G = G
         self.name = name
         self.all_edges = []
         for edge in G.edges():
-            if len(G[edge[0]][edge[1]]['timestamp']) >= 5: # ignore 1/2 timestamps
+            if len(G[edge[0]][edge[1]]['timestamp']) >= 11: # >= 5
                 self.all_edges.append(edge)
-        
         # self.all_edges = self.all_edges[:40] # for debug
     
     def __len__(self):
