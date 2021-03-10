@@ -28,7 +28,7 @@ class ConditionalIntensityFunction():
         hid_u, hid_v, emb_u, emb_v = self.model.hidden_rep[u], self.model.hidden_rep[v], self.model.embedding(u), self.model.embedding(v)
         # C1 = self.model.W_S.view(1, -1) @ torch.cat([hid_u, hid_v]).view(-1, 1) + emb_u.view(1, -1) @ emb_v.view(-1, 1)
         C1 = constant_1(self.model, hid_u, hid_v, emb_u, emb_v)
-        lambda_t = torch.exp(C1) + torch.sum(self.model.time_encoder.cos_encoding_mean(t - T))
+        lambda_t = torch.exp(C1) + self.model.time_encoder.cos_encoding_mean(t - T, u, v).sum()
         lambda_t = lambda_t.item()
         return lambda_t
 
@@ -47,9 +47,9 @@ class ConditionalDensityFunction():
         lambda_t = self.lambdaf(u, v, t, T)
         hid_u, hid_v, emb_u, emb_v = self.model.hidden_rep[u], self.model.hidden_rep[v], self.model.embedding(u), self.model.embedding(v)
         C1 = constant_1(self.model, hid_u, hid_v, emb_u, emb_v)
-        integral = (t - T[-1]) * torch.exp(C1) + torch.sum(self.model.time_encoder.sin_divide_omega_mean(t - T) - self.model.time_encoder.sin_divide_omega_mean(T[-1] - T))
+        integral = (t - T[-1]) * torch.exp(C1) + torch.sum(self.model.time_encoder.sin_divide_omega_mean(t - T, u, v) - self.model.time_encoder.sin_divide_omega_mean(T[-1] - T, u, v))
         
-        integral = integral + len(T) * self.model.time_encoder.alpha * (t - T[-1]) # NOTE: new formula
+        integral = integral + len(T) * self.model.time_encoder.alpha[u][v] * (t - T[-1]) # NOTE: new formula
         
         integral = integral.item()
         
@@ -118,6 +118,23 @@ def constant_1(model, hid_u, hid_v, emb_u, emb_v):
     # return model.W_S.view(1, -1) @ torch.cat([hid_u, hid_v]).view(-1, 1) + emb_u.view(1, -1) @ emb_v.view(-1, 1)
     return model.W_S_( torch.cat([hid_u, hid_v]).view(1, -1) ) + model.W_E_( torch.cat([emb_u, emb_v]).view(1, -1) )
 
+def model_device(model):
+    return next(model.parameters()).device
+
+def integral_mc_appro(lambda_f, t_start, t_end, N=100):
+    """ compute an approximation of lambda integral from t_start to t_end
+    Args:
+        lambda_f: the (conditional intensity)lambda function, callable
+        t_start: integral start
+        t_end: integral end
+    """
+    assert t_end > t_start
+    device = model_device(lambda_f)
+    points = np.random.uniform(t_start, t_end, N)
+    points = torch.FloatTensor(points).to(device)
+    values = lambda_f(points) # FIXME: to refine
+    return (t_end - t_start)/N * values
+
 
 def criterion(hidden_reps, embeddings, batch, model):
     """ compute negative log-likelihood """
@@ -136,16 +153,16 @@ def criterion(hidden_reps, embeddings, batch, model):
     for i, t_i in enumerate(T):
         lambda_ti = torch.exp( C1 )
         if i >= 1:
-            lambda_ti = lambda_ti + torch.sum(model.time_encoder.cos_encoding_mean(t_i - T[:i]) )
+            lambda_ti = lambda_ti + model.time_encoder.cos_encoding_mean(t_i - T[:i], u, v).sum()
         
         l1 = l1 + (-torch.log(lambda_ti))
     
     # import ipdb; ipdb.set_trace()
     # integral calculation
     l2 = T[-1]*torch.exp( C1 ) 
-    l2 = l2 + torch.sum( model.time_encoder.sin_divide_omega_mean( T[-1] - T[:-1] ) )
-    # l2 = l2 + model.time_encoder.alpha * torch.sum( torch.arange(1, len(T)).to(device) * (T[1:]-T[:-1]) ) # NOTE: new formula, NOTE: comment amendment
-    l2 = l2 + model.time_encoder.alpha * ( T[-1] - T[0] ) # NOTE: amendment
+    l2 = l2 + model.time_encoder.sin_divide_omega_mean(T[-1] - T[:-1], u, v).sum()
+    # l2 = l2 + model.time_encoder.alpha * torch.sum( torch.arange(1, len(T)).to(device) * (T[1:]-T[:-1]) ) # NOTE: new formula
+    l2 = l2 + model.time_encoder.alpha[u][v] * ( T[-1] - T[0] ) # NOTE: amendment
     l = l1 + l2
     return l
 

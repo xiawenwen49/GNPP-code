@@ -17,15 +17,17 @@ class TimeEncoder(nn.Module):
 class HarmonicEncoder(TimeEncoder):
     """ In paper 'Inductive representation learning on temporal graphs'
     """
-    def __init__(self, dimension):
+    def __init__(self, dimension, nnodes):
         super(HarmonicEncoder, self).__init__()
         assert dimension % 2 == 0, 'dimension should be an even'
         self.dimension = dimension
+        self.nnodes = nnodes
         self.basis_freq = torch.nn.Parameter((torch.from_numpy(1 / 5 ** np.linspace(1, 9, dimension//2))).float()) # omega_1, ..., omega_d
         self.phase_cos = torch.zeros(dimension//2, dtype=torch.float, requires_grad=False) # no gradient
         self.phase_sin = torch.zeros(dimension//2, dtype=torch.float, requires_grad=False)
 
-        self.alpha = torch.nn.Parameter( torch.FloatTensor([1]) )
+        # self.alpha = torch.nn.Parameter( torch.FloatTensor([1]) )
+        self.alpha = torch.nn.Parameter( torch.ones(nnodes, nnodes) )
         # self.alpha = torch.FloatTensor([1], requires_grad=False)
     
     def forward(self, ts):
@@ -37,21 +39,19 @@ class HarmonicEncoder(TimeEncoder):
         self.phase_sin = self.phase_sin.to(device)
 
         batch_size = ts.size(0)
-        # seq_len = 1
-                
         ts = ts.view(batch_size, 1)# [N, L, 1]
         # import ipdb; ipdb.set_trace()
-
         map_ts = ts * self.basis_freq.view(1, -1) # [N, dimension]
         # map_ts += self.phase.view(1, -1)
-        
         harmonic_cos = torch.cos(map_ts + self.phase_cos.view(1, -1))
         harmonic_sin = torch.sin(map_ts + self.phase_sin.view(1, -1))
         harmonic = math.sqrt(1/self.dimension) * torch.cat([harmonic_cos, harmonic_sin], axis=1)
         return harmonic # self.dense(harmonic)
     
-    def cos_encoding_mean(self, ts):
-        """ ts should be t_1 - t_2 """
+    def cos_encoding_mean(self, ts, u, v):
+        """ ts should be t_1 - t_2 
+        ts should be from the same node pair u-v
+        """
         # import ipdb; ipdb.set_trace()
         device = ts.device
         self.phase_cos = self.phase_cos.to(device)
@@ -64,12 +64,14 @@ class HarmonicEncoder(TimeEncoder):
 
         # mean = torch.mean(harmonic_cos, axis=1)
  
-        mean = self.alpha * (torch.mean(harmonic_cos, axis=1) + 1) # NOTE: new formula
+        mean = self.alpha[u][v] * (torch.mean(harmonic_cos, axis=1) + 1) # NOTE: new formula
 
         return mean
 
-    def sin_divide_omega_mean(self, ts):
-        """ ts should be t_{n^{u,v}} - t_j """
+    def sin_divide_omega_mean(self, ts, u, v):
+        """ ts should be t_{n^{u,v}} - t_j 
+        ts should be from the same node pair u-v
+        """
         # import ipdb; ipdb.set_trace()
         device = ts.device
         # self.basis_freq = self.basis_freq.to(device)
@@ -83,7 +85,7 @@ class HarmonicEncoder(TimeEncoder):
         harmonic_sin_divide_omega = harmonic_sin / (self.basis_freq.view(1, -1) + 1e-6)
 
         # mean = torch.mean(harmonic_sin_divide_omega, axis=1)
-        mean = self.alpha * torch.mean(harmonic_sin_divide_omega, axis=1) # NOTE: new formula
+        mean = self.alpha[u][v] * torch.mean(harmonic_sin_divide_omega, axis=1) # NOTE: new formula
         return mean
 
     def clip_weights(self):
@@ -145,9 +147,10 @@ class TGN(nn.Module):
         self.embedding = torch.nn.Embedding(embedding_matrix.shape[0], embedding_matrix.shape[1])
         self.embedding.weight = torch.nn.Parameter(torch.FloatTensor(embedding_matrix), requires_grad=True) # NOTE: test
         self.time_encoder_args = time_encoder_args
-        # self.time_encoder = HarmonicEncoder(time_encoder_args['dimension'])
-        self.time_encoder = PositionEncoder(time_encoder_args['maxt'], time_encoder_args['rows'], time_encoder_args['dimension'])
-        
+        self.time_encoder = HarmonicEncoder(time_encoder_args['dimension'], G.number_of_nodes())
+        # self.time_encoder = PositionEncoder(time_encoder_args['maxt'], time_encoder_args['rows'], time_encoder_args['dimension'])
+        self.gru = torch.nn.GRU(input_size=time_encoder_args['dimension'], hidden_size=time_encoder_args['dimension'], num_layers=2)
+
         self.layers = nn.ModuleList()
         for i in range(layers):
             in_channels = self.layers[-1].heads*self.layers[-1].out_channels if i >= 1 else in_channels
