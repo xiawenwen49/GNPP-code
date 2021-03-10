@@ -147,8 +147,8 @@ class TGN(nn.Module):
         self.embedding = torch.nn.Embedding(embedding_matrix.shape[0], embedding_matrix.shape[1])
         self.embedding.weight = torch.nn.Parameter(torch.FloatTensor(embedding_matrix), requires_grad=True) # NOTE: test
         self.time_encoder_args = time_encoder_args
-        self.time_encoder = HarmonicEncoder(time_encoder_args['dimension'], G.number_of_nodes())
-        # self.time_encoder = PositionEncoder(time_encoder_args['maxt'], time_encoder_args['rows'], time_encoder_args['dimension'])
+        # self.time_encoder = HarmonicEncoder(time_encoder_args['dimension'], G.number_of_nodes())
+        self.time_encoder = PositionEncoder(time_encoder_args['maxt'], time_encoder_args['rows'], time_encoder_args['dimension'])
         self.gru = torch.nn.GRU(input_size=time_encoder_args['dimension'], hidden_size=time_encoder_args['dimension'], num_layers=2)
 
         self.layers = nn.ModuleList()

@@ -68,6 +68,7 @@ def read_file(datadir, dataset, directed=False, preprocess=True, logger=None, re
     # relabel all nodes using integers from 0 to N-1
     old_new_dict = dict( zip(list(G.nodes), range(G.number_of_nodes()) ) )
     G = nx.convert_node_labels_to_integers(G, first_label=0, ordering='default')
+    G.maxt = edgearray[:, -1].max()
     
     # read embeddings
     emb_file = Path(datadir) / dataset / (dataset + '.emb')

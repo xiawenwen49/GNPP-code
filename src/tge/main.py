@@ -106,7 +106,8 @@ def main():
     dataloaders = utils.get_dataloader(train_set, val_set, test_set, args)
     
     # build model
-    args.time_encoder_args = {'dimension': args.time_encoder_dimension, 'maxt': args.time_encoder_maxt, 'rows': args.time_encoder_rows}
+    args.time_encoder_maxt = G.maxt # from the dataset
+    args.time_encoder_args = {'maxt': args.time_encoder_maxt, 'rows': args.time_encoder_rows, 'dimension': args.time_encoder_dimension}
     model = get_model(G, embedding_matrix, args, logger)
 
     if args.eval != '':
