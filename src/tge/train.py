@@ -166,6 +166,7 @@ def criterion(hidden_reps, embeddings, batch, model):
     l = l1 + l2
     return l
 
+# TODO: 1th step, no gnn, only self-attention for lambda function
 def optimize_epoch(model, optimizer, train_loader, args, logger, **kwargs):
     model.train() # train mode
     device = get_device(args.gpu)
@@ -178,9 +179,10 @@ def optimize_epoch(model, optimizer, train_loader, args, logger, **kwargs):
         uv, t = batch
         u, v = uv[0]
         t = t[0]
-        hidden_reps = model(batch)
-        embeddings = model.embedding(u), model.embedding(v)
-        loss = criterion(hidden_reps, embeddings, batch, model)
+        # hidden_reps = model(batch)
+        # embeddings = model.embedding(u), model.embedding(v)
+        # loss = criterion(hidden_reps, embeddings, batch, model)
+        loss = criterion(batch, model)
 
         batch_counter += 1
         if batch_counter % 16 == 0: # update model parameters for one step

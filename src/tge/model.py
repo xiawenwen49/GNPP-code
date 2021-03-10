@@ -178,6 +178,8 @@ class TGN(nn.Module):
         glorot(self.W_E_.weight)
 
     def forward(self, batch):
+        return None
+
         uv, t = batch
         u, v = uv[0] # assume default batch_size = 1
         # t = t[0]
