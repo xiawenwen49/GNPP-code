@@ -106,36 +106,32 @@ class PositionEncoder(TimeEncoder):
         self.deltat = maxt / rows
         self.dimension = dimension
 
-        self.timing_encoding_matrix = self.get_timing_encoding_matrix(rows, dimension) # on cpu
+        self.time_embedding = torch.nn.Embedding.from_pretrained( torch.tensor(self.get_timing_encoding_matrix(rows, dimension)), freeze=True )
 
     def forward(self, timestamps: Tensor):
-        device = timestamps.device
-        indexes = self.timestamps_to_indexes(timestamps)  # np array, on cpu
-        return torch.FloatTensor(self.timing_encoding_matrix[indexes]).to(device)  # to gpu
+        indexes = self.timestamps_to_indexes(timestamps)
+        return self.time_embedding(indexes)
 
     def timestamps_to_indexes(self, timestamps: Tensor):
         """ convert float tensor timestamps to long tensor indexes """
-        timestamps = timestamps.to('cpu').numpy()
-        indexes = (timestamps // self.deltat).astype(np.int)
-        indexes = np.clip(indexes, 0, self.rows - 1).astype(np.int)
+        indexes = timestamps // self.deltat
+        indexes = torch.clamp(indexes, 0, self.rows - 1)
+        if indexes.is_cuda:
+            indexes = indexes.type(torch.cuda.LongTensor)
+        else:
+            indexes = indexes.type(torch.LongTensor)
         return indexes
 
     def get_timing_encoding_matrix(self, length, dimension, min_timescale=1.0, max_timescale=1.0e4, start_index=0):
-        """
-        https://kazemnejad.com/blog/transformer_architecture_positional_encoding/
-        """
+        """ https://kazemnejad.com/blog/transformer_architecture_positional_encoding/ """
         assert dimension % 2 == 0, 'TAT time encoding dimension must be even'
         T = np.arange(length).reshape((length, 1))
         W_inv_log = np.arange(dimension // 2) * 2 / (dimension - 2) * np.log(
             max_timescale)  # (dimension-2)就等价与tensorflow的实现。
         W = 1 / np.exp(W_inv_log)
-
         position_encodings = T @ W.reshape((1, dimension // 2))
         position_encodings = np.concatenate([np.sin(position_encodings), np.cos(position_encodings)], axis=1)
-        position_encodings = torch.Tensor(position_encodings)  # [rows, dimension] torch tensor, requires_grad默认false
-
         return position_encodings
-
 
 
 class TGN(nn.Module):
@@ -149,7 +145,10 @@ class TGN(nn.Module):
         self.time_encoder_args = time_encoder_args
         # self.time_encoder = HarmonicEncoder(time_encoder_args['dimension'], G.number_of_nodes())
         self.time_encoder = PositionEncoder(time_encoder_args['maxt'], time_encoder_args['rows'], time_encoder_args['dimension'])
-        self.gru = torch.nn.GRU(input_size=time_encoder_args['dimension'], hidden_size=time_encoder_args['dimension'], num_layers=2)
+        # self.gru = torch.nn.GRU(input_size=time_encoder_args['dimension'], hidden_size=time_encoder_args['dimension'], num_layers=2)
+        self.AttenModule = torch.nn.MultiheadAttention(time_encoder_args['dimension'], num_heads=1)
+        self.alpha = torch.nn.Embedding(G.number_of_nodes(), 128)
+        self.W_H = torch.nn.Parameter(torch.zeros(time_encoder_args['dimension'], 1)) # column vector
 
         self.layers = nn.ModuleList()
         for i in range(layers):
@@ -170,12 +169,16 @@ class TGN(nn.Module):
     
     def clip_time_encoder_weight(self):
         self.time_encoder.clip_weights()
+        # self.alpha.weight.clamp_(0, np.inf)
 
 
     def initialize(self):
+        glorot(self.alpha.weight)
+        glorot(self.W_H)
         glorot(self.W_S)
         glorot(self.W_S_.weight)
         glorot(self.W_E_.weight)
+        self.clip_time_encoder_weight()
 
     def forward(self, batch):
         return None

@@ -96,7 +96,7 @@ class EventDataset(Dataset):
         for edge in G.edges():
             if len(G[edge[0]][edge[1]]['timestamp']) >= 5: # >= 5
                 self.all_edges.append(edge)
-        # self.all_edges = self.all_edges[:40] # for debug
+        self.all_edges = self.all_edges[:40] # for debug
     
     def __len__(self):
         return len(self.all_edges)

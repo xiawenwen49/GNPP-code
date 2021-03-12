@@ -3,170 +3,280 @@ import numpy as np
 import pandas as pd
 import warnings
 from tqdm import tqdm
-from tge.model import HarmonicEncoder
+from tge.model import HarmonicEncoder, PositionEncoder
 from xww.utils.training import get_device, get_optimizer, Recorder
 from xww.utils.multiprocessing import MultiProcessor
 
-# np.seterr(all='raise')
-
-# class Metric():
-#     def __init__(self):
-#         pass
-#     def loss_metric(self):
-#         pass
 
 class ConditionalIntensityFunction():
     """ the conditional intensity function \lambda, if given observed history """
     def __init__(self, model):
         self.model = model
-        # self.time_encoder = time_encoder
 
-    def __call__(self, u, v, t, T):
-        """ T is the observed times """
-        self.model.eval()
-        # self.time_encoder.eval()
-        hid_u, hid_v, emb_u, emb_v = self.model.hidden_rep[u], self.model.hidden_rep[v], self.model.embedding(u), self.model.embedding(v)
-        # C1 = self.model.W_S.view(1, -1) @ torch.cat([hid_u, hid_v]).view(-1, 1) + emb_u.view(1, -1) @ emb_v.view(-1, 1)
-        C1 = constant_1(self.model, hid_u, hid_v, emb_u, emb_v)
-        lambda_t = torch.exp(C1) + self.model.time_encoder.cos_encoding_mean(t - T, u, v).sum()
-        lambda_t = lambda_t.item()
-        return lambda_t
+    def __call__(self, u, v, T, t):
+        """ \lambda^{u, v}(t|T_{u, v}) 
+        Args: 
+            u, v: node pair
+            t: target time for value calculation
+            T: observed timestamps before t.
+        """
+        pass
 
+    def integral(self, u, v, T, t_start, t_end):
+        """ integral from t_start to t_end. By MC or by closed-form.
+        Args: 
+        Args:
+            u, v: the node pair
+            t_start: integral start
+            t_end: integral end
+            T: observed timestamps `before` t_start. max(T) <= t_start
+        """
+        pass
+
+# TODO: f function
+# TODO: predict function
 class ConditionalDensityFunction():
     """ the conditional density function f(t) """
-    def __init__(self, model):
-        self.model = model
-        self.lambdaf = ConditionalIntensityFunction(model) # can not use self.lambda as variable name. `lambda` cannot appear as a variabel
-        # self.time_encoder = time_encoder # require \omega in time_encoder
+    def __init__(self, lambdaf): # can not use self.lambda as variable name. `lambda` cannot appear as a variabel
+        """ lambdaf is a conditional intensity function instance """
+        # self.model = model
+        self.lambdaf = lambdaf
+    
+    def __call__(self, u, v, T, t):
+        """ f^{u, v}(t|T_{u, v}) = \lambda^{u, v}(t|T_{u, v}) * \int_{0}^{max(T_{u, v})} \lambda(s) ds
+        """
+        assert t >= T.max(), 't should >= T.max(), i.e., t_n'
+        lambda_t = self.lambdaf(u, v, T, t)
+        integral = self.lambdaf.integral(u, v, T, T[-1], t)
+        f_t = lambda_t * torch.exp(-1 * integral)
+        return f_t
+    
+    def predict(self, u, v, T):
+        """ next event time expectation by MC
+        """
+        device = u.device
+        intervals = T[1:] - T[:-1]
+        max_interval = torch.max(intervals)
+        T_interval = 2 * max_interval
+        t_end = T[-1] + T_interval
 
-    def __call__(self, u, v, t, T):
-        """ can t be a batch? """
-        self.model.eval()
-        # self.time_encoder.eval()
         # import ipdb; ipdb.set_trace()
-        lambda_t = self.lambdaf(u, v, t, T)
+        counter = 0
+        test_value = self(u, v, T, t_end)
+        while (test_value < 1e-3 or test_value > 0.1) and t_end > T[-1]: # >1e6 for overflow
+            if test_value < 1e-3: # shrink
+                t_end = (T[-1] + t_end)/2
+            elif test_value > 0.1: # expand
+                t_end = t_end + (t_end - T[-1])/2
+            counter = counter + 1
+            if counter > 20:
+                break
+            test_value = self(u, v, T, t_end)
+        
+        T_interval = t_end - T[-1]
+        size = 10
+        # t_samples = np.random.uniform(T[-1].cpu().item(), (T[-1]+T_interval).cpu().item(), size=size) # sampleing from a future interval -> too large variance
+        t_samples = torch.rand(size).to(device) * T_interval + T[-1] # FIXME: debug here
+        values = torch.zeros_like(t_samples)
+        for i, t in enumerate(t_samples):
+            f_t = self(u, v, T, t)
+            values[i] = f_t.data.squeeze() # used for MC integral of t*f(t) dt
+        
+        values = (T_interval/size) * values # it should be probability now.
+        values = values / (values.sum() + 1e-6) # normalilze, the result of this step should be similar with that of the former step.
+        estimated_expection = (values * t_samples).sum()
+        return estimated_expection
+
+
+
+class HarmonicIntensity(ConditionalIntensityFunction):
+    def __init__(self, model):
+        super(HarmonicIntensity, self).__init__(model)
+        pass
+        
+    def __call__(self, u, v, t, T):
+        self.model.eval()
         hid_u, hid_v, emb_u, emb_v = self.model.hidden_rep[u], self.model.hidden_rep[v], self.model.embedding(u), self.model.embedding(v)
         C1 = constant_1(self.model, hid_u, hid_v, emb_u, emb_v)
-        integral = (t - T[-1]) * torch.exp(C1) + torch.sum(self.model.time_encoder.sin_divide_omega_mean(t - T, u, v) - self.model.time_encoder.sin_divide_omega_mean(T[-1] - T, u, v))
-        
-        integral = integral + len(T) * self.model.time_encoder.alpha[u][v] * (t - T[-1]) # NOTE: new formula
-        
-        integral = integral.item()
-        
-        # import ipdb; ipdb.set_trace()
-        try:
-            integral = np.clip(integral, -100, 100) # overflow
-            f_t = lambda_t * np.exp(-1 * integral.item())
-        except:
-            # import ipdb; ipdb.set_trace()
-            f_t = 0
-        return f_t
-
-def predict(model, u, v, T):
-    """ predict the next event time for (u, v), given historical times T between (u, v) """
-    f = ConditionalDensityFunction(model)
-
-    intervals = T[1:] - T[:-1]
-    max_interval = torch.max(intervals)
-    # T_interval = 2*(T[-1] - T[0])
-    T_interval = 200 * max_interval
-    t_end = T[-1] + T_interval
-
-    # import ipdb; ipdb.set_trace()
-    counter = 0
-    while (f(u, v, t_end, T) < 1e-4 or f(u, v, t_end, T) > 1e3) and t_end > T[-1]: # >1e6 for overflow
-        t_end = (T[-1] + t_end)/2
-        counter = counter + 1
-        if counter > 100:
-            break
-
-    # t_start = T[-1]
-    # while True:
-    #     if f(u, v, t_end, T) < 1e-5:
-    #         t_end = (t_start + t_end) / 2
-    #     if f(u, v, t_end, T) > 1e-3:
-    #         t_end = t_end + t_end - t_start
-    #     if f(u, v, t_start, T) > 1e-3:
-    #         t_start = (t_start + t_end) / 2
-    #     if f(u, v, t_start, T) < 1e-5:
-    #         t_start = min( t_start - (t_end - t_start), T[-1] )
-    #
-    #     counter = counter + 1
-    #     if counter > 100:
-    #         break
-    # t_end = (t_start + t_end) / 2
-
-    T_interval = (t_end - T[-1]).cpu().item()
-    size = 10
-    # t_samples = np.random.uniform(T[-1].cpu().item(), (T[-1]+T_interval).cpu().item(), size=size) # sampleing from a future interval -> too large variance
-    t_samples = np.linspace(T[-1].cpu().item(), (T[-1]+T_interval).cpu().item(), num=size) + T_interval/size
-    transformed_samples = []
-    for t in t_samples:
-        f_t = f(u, v, t, T) # item
-        # transformed_samples.append( T_interval * f_t * t ) # importance sampling
-        transformed_samples.append( f_t ) # used for area under f(t) for expectation
+        lambda_t = torch.exp(C1) + self.model.time_encoder.cos_encoding_mean(t - T, u, v).sum()
+        # lambda_t = lambda_t.item()
+        return lambda_t
     
-    transformed_samples = np.array(transformed_samples)
-    transformed_samples = transformed_samples * (T_interval/size) # it should be probability now.
-    transformed_samples = transformed_samples / (np.sum(transformed_samples) + 1e-6) # normalilze, the result of this step should be similar with that of the former step.
-    estimated_expection = np.sum(transformed_samples * t_samples)
+    def integral(self, u, v, T, t_start, t_end):
+        """ by closed-form """
+        # self.model.eval()
+        # import ipdb; ipdb.set_trace()
+        # lambda_t = self.lambdaf(u, v, t_end, T)
+        hid_u, hid_v, emb_u, emb_v = self.model.hidden_rep[u], self.model.hidden_rep[v], self.model.embedding(u), self.model.embedding(v)
+        C1 = constant_1(self.model, hid_u, hid_v, emb_u, emb_v)
+        integral = (t_end - T[-1]) * torch.exp(C1) + torch.sum(self.model.time_encoder.sin_divide_omega_mean(t_end - T, u, v) - self.model.time_encoder.sin_divide_omega_mean(T[-1] - T, u, v))
+        integral = integral + len(T) * self.model.time_encoder.alpha[u][v] * (t_end - T[-1]) # NOTE: new formula
+        # integral = integral.item()
+        integral = torch.clamp(integral, -100, 100)
+        return integral
 
-    # estimated_expection = np.mean(transformed_samples)
-    return estimated_expection
+class AttenIntensity(ConditionalIntensityFunction):
+    def __init__(self, model):
+        super(AttenIntensity, self).__init__(model)
+    
+    def __call__(self, u, v, T, t):
+        # COMPLETED: to support t as a batch
+        # COMPLETED: to debug
+        assert isinstance(self.model.time_encoder, PositionEncoder), 'here the time encoder should be PositionEncoder'
+        time_encoding_dim = self.model.time_encoder_args['dimension']
+        emb_t = self.model.time_encoder(t)
+        emb_T = self.model.time_encoder(T)
+        emb_t = emb_t.view(t.reshape(1, -1).shape[1], 1, time_encoding_dim)
+        emb_T = emb_T.view(T.reshape(1, -1).shape[1], 1, time_encoding_dim)
+        if t.is_cuda:
+            emb_t = emb_t.type(torch.cuda.FloatTensor) # https://pytorch.org/docs/stable/generated/torch.nn.MultiheadAttention.html
+            emb_T = emb_T.type(torch.cuda.FloatTensor)
+        else:
+            emb_t = emb_t.type(torch.FloatTensor)
+            emb_T = emb_T.type(torch.FloatTensor)
+        atten_output, atten_output_weight = self.model.AttenModule(emb_t, emb_T, emb_T) # query, key, value. 
+        atten_output = atten_output.squeeze(1)
+        alpha = soft_plus(1, (self.model.alpha(u) * self.model.alpha(v)).sum() ) # alpha should > 0
+        value = soft_plus(alpha, atten_output @ self.model.W_H )
+        return value
+    
+    def integral(self, u, v, T, t_start, t_end, N=10):
+        """ by MC """
+        if t_start is None:
+            t_start = 0
+        assert t_end >= t_start
+        assert t_start >= T.max(), 't_start should >= T.max(), i.e., t_n'
+        device = model_device(self.model)
+        points = torch.rand(N).to(device) * (t_end - t_start) + t_start
+        # points = points.to(device)
+        values = self(u, v, T, points) # FIXME: to debug
+        return (t_end - t_start)/N * values.sum()
+
+def soft_plus(phi, x):
+    return phi * torch.log(1 + torch.exp( x / phi ))
+
+def log_likelihood(u, v, lambdaf, T):
+    """
+    Args:
+        u, v: node pair
+        lambdaf: conditional intensity function
+        T: observed hsitory
+    """
+    # ll = 0
+    ll1 = 0
+    integral = 0
+    for i, t in enumerate(T[1:]):
+        ll1 = ll1 + torch.log( lambdaf(u, v, T[:i+1], t) )
+        integral = integral + lambdaf.integral(u, v, T[:i+1], T[i], T[i+1])
+        pass
+    ll = ll1 - integral # log likelihood
+    return ll
+
+# def predict(model, u, v, T):
+#     """ predict the next event time for (u, v), given historical times T between (u, v) """
+#     # lambdaf = HarmonicIntensity(model)
+#     lambdaf = AttenIntensity(model)
+#     f = ConditionalDensityFunction(lambdaf)
+
+#     intervals = T[1:] - T[:-1]
+#     max_interval = torch.max(intervals)
+#     # T_interval = 2*(T[-1] - T[0])
+#     T_interval = 200 * max_interval
+#     t_end = T[-1] + T_interval
+
+#     # import ipdb; ipdb.set_trace()
+#     counter = 0
+#     while (f(u, v, t_end, T) < 1e-4 or f(u, v, t_end, T) > 1e3) and t_end > T[-1]: # >1e6 for overflow
+#         t_end = (T[-1] + t_end)/2
+#         counter = counter + 1
+#         if counter > 100:
+#             break
+
+#     # t_start = T[-1]
+#     # while True:
+#     #     if f(u, v, t_end, T) < 1e-5:
+#     #         t_end = (t_start + t_end) / 2
+#     #     if f(u, v, t_end, T) > 1e-3:
+#     #         t_end = t_end + t_end - t_start
+#     #     if f(u, v, t_start, T) > 1e-3:
+#     #         t_start = (t_start + t_end) / 2
+#     #     if f(u, v, t_start, T) < 1e-5:
+#     #         t_start = min( t_start - (t_end - t_start), T[-1] )
+#     #
+#     #     counter = counter + 1
+#     #     if counter > 100:
+#     #         break
+#     # t_end = (t_start + t_end) / 2
+
+#     T_interval = (t_end - T[-1]).cpu().item()
+#     size = 10
+#     # t_samples = np.random.uniform(T[-1].cpu().item(), (T[-1]+T_interval).cpu().item(), size=size) # sampleing from a future interval -> too large variance
+#     t_samples = np.linspace(T[-1].cpu().item(), (T[-1]+T_interval).cpu().item(), num=size) + T_interval/size
+#     transformed_samples = []
+#     for t in t_samples:
+#         f_t = f(u, v, t, T) # item
+#         # transformed_samples.append( T_interval * f_t * t ) # importance sampling
+#         transformed_samples.append( f_t ) # used for area under f(t) for expectation
+    
+#     transformed_samples = np.array(transformed_samples)
+#     transformed_samples = transformed_samples * (T_interval/size) # it should be probability now.
+#     transformed_samples = transformed_samples / (np.sum(transformed_samples) + 1e-6) # normalilze, the result of this step should be similar with that of the former step.
+#     estimated_expection = np.sum(transformed_samples * t_samples)
+
+#     # estimated_expection = np.mean(transformed_samples)
+#     return estimated_expection
 
 def constant_1(model, hid_u, hid_v, emb_u, emb_v):
-    # return model.W_S.view(1, -1) @ torch.cat([hid_u, hid_v]).view(-1, 1) + emb_u.view(1, -1) @ emb_v.view(-1, 1)
     return model.W_S_( torch.cat([hid_u, hid_v]).view(1, -1) ) + model.W_E_( torch.cat([emb_u, emb_v]).view(1, -1) )
 
 def model_device(model):
     return next(model.parameters()).device
 
-def integral_mc_appro(lambda_f, t_start, t_end, N=100):
-    """ compute an approximation of lambda integral from t_start to t_end
-    Args:
-        lambda_f: the (conditional intensity)lambda function, callable
-        t_start: integral start
-        t_end: integral end
-    """
-    assert t_end > t_start
-    device = model_device(lambda_f)
-    points = np.random.uniform(t_start, t_end, N)
-    points = torch.FloatTensor(points).to(device)
-    values = lambda_f(points) # FIXME: to refine
-    return (t_end - t_start)/N * values
+# def criterion():
+#     pass
 
+# def criterion(hidden_reps, embeddings, batch, model):
+#     """ compute negative log-likelihood """
+#     uv, t = batch
+#     u, v = uv[0] # assume batch_size=1
+#     T = t[0]
+#     # t = t - torch.min(t) # ?
 
-def criterion(hidden_reps, embeddings, batch, model):
-    """ compute negative log-likelihood """
-    uv, t = batch
-    u, v = uv[0] # assume batch_size=1
-    T = t[0]
-    # t = t - torch.min(t) # ?
-
-    hid_u, hid_v = hidden_reps
-    emb_u, emb_v = embeddings
-    device = u.device
-    # import ipdb; ipdb.set_trace()
-    # event calculation
-    C1 = constant_1(model, hid_u, hid_v, emb_u, emb_v)
-    l1 = 0
-    for i, t_i in enumerate(T):
-        lambda_ti = torch.exp( C1 )
-        if i >= 1:
-            lambda_ti = lambda_ti + model.time_encoder.cos_encoding_mean(t_i - T[:i], u, v).sum()
+#     hid_u, hid_v = hidden_reps
+#     emb_u, emb_v = embeddings
+#     device = u.device
+#     # import ipdb; ipdb.set_trace()
+#     # event calculation
+#     C1 = constant_1(model, hid_u, hid_v, emb_u, emb_v)
+#     l1 = 0
+#     for i, t_i in enumerate(T):
+#         lambda_ti = torch.exp( C1 )
+#         if i >= 1:
+#             lambda_ti = lambda_ti + model.time_encoder.cos_encoding_mean(t_i - T[:i], u, v).sum()
         
-        l1 = l1 + (-torch.log(lambda_ti))
+#         l1 = l1 + (-torch.log(lambda_ti))
     
-    # import ipdb; ipdb.set_trace()
-    # integral calculation
-    l2 = T[-1]*torch.exp( C1 ) 
-    l2 = l2 + model.time_encoder.sin_divide_omega_mean(T[-1] - T[:-1], u, v).sum()
-    # l2 = l2 + model.time_encoder.alpha * torch.sum( torch.arange(1, len(T)).to(device) * (T[1:]-T[:-1]) ) # NOTE: new formula
-    l2 = l2 + model.time_encoder.alpha[u][v] * ( T[-1] - T[0] ) # NOTE: amendment
-    l = l1 + l2
-    return l
+#     # import ipdb; ipdb.set_trace()
+#     # integral calculation
+#     l2 = T[-1]*torch.exp( C1 ) 
+#     l2 = l2 + model.time_encoder.sin_divide_omega_mean(T[-1] - T[:-1], u, v).sum()
+#     # l2 = l2 + model.time_encoder.alpha * torch.sum( torch.arange(1, len(T)).to(device) * (T[1:]-T[:-1]) ) # NOTE: new formula
+#     l2 = l2 + model.time_encoder.alpha[u][v] * ( T[-1] - T[0] ) # NOTE: amendment
+#     l = l1 + l2
+#     return l
 
-# TODO: 1th step, no gnn, only self-attention for lambda function
+def criterion(model, batch, **kwargs):
+    uv, t = batch
+    u, v = uv[0]
+    T = t[0]
+
+    lambdaf = kwargs['lambdaf']
+    ll = log_likelihood(u, v, lambdaf, T)
+    loss = -1 * ll # negative log likelihood
+    return loss
+
+
+# TODO: no gnn, only self-attention for lambda function
 def optimize_epoch(model, optimizer, train_loader, args, logger, **kwargs):
     model.train() # train mode
     device = get_device(args.gpu)
@@ -176,13 +286,8 @@ def optimize_epoch(model, optimizer, train_loader, args, logger, **kwargs):
 
     for i, batch in tqdm(enumerate(train_loader), total=len(train_loader)):
         batch = list(map(lambda x: x.to(device), batch)) # set device
-        uv, t = batch
-        u, v = uv[0]
-        t = t[0]
-        # hidden_reps = model(batch)
-        # embeddings = model.embedding(u), model.embedding(v)
-        # loss = criterion(hidden_reps, embeddings, batch, model)
-        loss = criterion(batch, model)
+        lambdaf = kwargs.get('lambdaf')
+        loss = criterion(model, batch, lambdaf=lambdaf)
 
         batch_counter += 1
         if batch_counter % 16 == 0: # update model parameters for one step
@@ -190,34 +295,39 @@ def optimize_epoch(model, optimizer, train_loader, args, logger, **kwargs):
             # import ipdb; ipdb.set_trace()
             optimizer.step()
             optimizer.zero_grad()
-            model.reset_hidden_rep() # reset hidden representation matrix
+            # model.reset_hidden_rep() # reset hidden representation matrix
             model.clip_time_encoder_weight()
             batch_counter = 0
         else:
             loss.backward(retain_graph=True)
         recorder.append(loss.item())
 
-    model.prepare_hidden_rep() # update hidden_rep, for next optimize epoch or for evaluation
+    # model.prepare_hidden_rep() # update hidden_rep, for next optimize epoch or for evaluation
     return np.mean(recorder)
 
-def batch_evaluate(batch, model):
+def batch_evaluate(model, batch, **kwargs):
     device = model.W_S_.weight.device
     batch = list(map(lambda x: x.to(device), batch)) # set device
     uv, T_all = batch
     u, v = uv[0] # only one sample
     T_all = T_all[0]
     T, t = T_all[:-1], T_all[-1]
-    hidden_reps = model(batch)
-    embeddings = model.embedding(u), model.embedding(v)
-    loss = criterion(hidden_reps, embeddings, batch, model) # tensor
-    pred = predict(model, u, v, T)
-    se = (pred - t.cpu().item())**2 # item
-    abs = np.abs(pred - t.cpu().item())
-    abs_ratio = abs / (t - T[-1] + 1e-6).cpu().item()
+
+    lambdaf = kwargs.get('lambdaf')
+    ff = ConditionalDensityFunction(lambdaf)
+    # hidden_reps = model(batch)
+    # embeddings = model.embedding(u), model.embedding(v)
+    # loss = criterion(hidden_reps, embeddings, batch, model) # tensor
+    # pred = predict(model, u, v, T)
+    loss = criterion(model, batch, lambdaf=lambdaf) # tensor
+    pred = ff.predict(u, v, T)
+    se = (pred - t)**2 # item
+    se = se.cpu().item()
+    abs = np.abs((pred - t).cpu().item())
+    abs_ratio = abs / ((T_all[1:] - T_all[:-1]).mean().cpu().item() + 1e-6) # now the denominator is average interval
     # import ipdb; ipdb.set_trace()
     return {'loss': loss.item(), 'se': se, 'abs_ratio': abs_ratio}
 
-    
 def evaluate(model, train_loader, test_loader, args, logger, **kwargs):
     model.eval() # eval mode
     device = get_device(args.gpu)
@@ -231,14 +341,14 @@ def evaluate(model, train_loader, test_loader, args, logger, **kwargs):
         # batch_evaluater = batch_evaluate_wraper(model, time_encoder, batch_evaluate)
         mp = MultiProcessor(40)
         # result = mp.run_imap(batch_evaluater, test_loader)
-        result = mp.run_queue(batch_evaluate, test_loader, model=model)
+        result = mp.run_queue(batch_evaluate, test_loader, model=model, **kwargs)
         result = pd.DataFrame(result)
         loss_recorder = result['loss'].tolist()
         se_recorder = result['se'].tolist()
         abs_ratio_recorder = result['abs_ratio'].tolist()
     else:
         for batch_test in tqdm(test_loader, total=len(test_loader)):
-            batch_result = batch_evaluate(batch_test, model)
+            batch_result = batch_evaluate(model, batch_test, lambdaf=kwargs['lambdaf'])
             loss_recorder.append(batch_result['loss'])
             se_recorder.append(batch_result['se'])
             abs_ratio_recorder.append(batch_result['abs_ratio'])
@@ -250,14 +360,15 @@ def train_model(model, dataloaders, args, logger):
     train_loader, val_loader, test_loader = dataloaders
     # time_encoder = HarmonicEncoder(args.time_encoder_dimension)
     optimizer = get_optimizer(model, args.optimizer, args.lr, args.l2)
+    lambdaf = AttenIntensity(model)
     recorder = Recorder({'loss': 0}, args.checkpoint_dir, args.dataset, args.time_str)
     # results = evaluate(model, train_loader, test_loader, args, logger) # evaluate with random model
     # logger.info(f"Without training, test_loss: {results['loss']:.4f}, test_rmse: {results['rmse']:.4f}, test_abs_ratio: {results['abs_ratio']:.4f}")
     for i in range(args.epochs):
-        train_loss = optimize_epoch(model, optimizer, train_loader, args, logger, epoch=i)
+        train_loss = optimize_epoch(model, optimizer, train_loader, args, logger, epoch=i, lambdaf=lambdaf)
         recorder.append_model_state(model.state_dict())
         recorder.save_model(latest=True)
-        results = evaluate(model, train_loader, test_loader, args, logger, epoch=i)
+        results = evaluate(model, train_loader, test_loader, args, logger, epoch=i, lambdaf=lambdaf)
         logger.info(f"Epoch {i}, train_loss: {train_loss:.4f}, test_loss: {results['loss']:.4f}, test_rmse: {results['rmse']:.4f}, test_abs_ratio: {results['abs_ratio']:.6f}")
         recorder.append_full_metrics({'loss': train_loss}, 'train')
         recorder.append_full_metrics({'loss': results['loss'], 'rmse': results['rmse'], 'abs_ratio': results['abs_ratio']}, 'test')
@@ -278,7 +389,8 @@ def evaluate_state_dict(model, dataloaders, args, logger, **kwargs):
     # import ipdb; ipdb.set_trace()
     model.load_state_dict(state_dict)
     model = model.to(device)
+    lambdaf = AttenIntensity(model)
     logger.info(f'Evaluate using {time_str} state_dict.')
     train_loader, val_loader, test_loader = dataloaders
-    results = evaluate(model, train_loader, test_loader, args, logger, **kwargs)
+    results = evaluate(model, train_loader, test_loader, args, logger, lambdaf=lambdaf)
     logger.info(f"Eval, test_loss: {results['loss']:.4f}, test_rmse: {results['rmse']:.4f}, test_abs_ratio: {results['abs_ratio']:.4f}")

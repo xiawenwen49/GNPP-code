@@ -2,9 +2,9 @@ import numpy as np
 import torch
 import tge.utils
 from pathlib import Path
-from tge.model import HarmonicEncoder, get_model
+from tge.model import HarmonicEncoder, PositionEncoder, get_model
 from tge.main import parse_args
-from tge.train import criterion, ConditionalIntensityFunction, ConditionalDensityFunction
+from tge.train import criterion, ConditionalIntensityFunction, ConditionalDensityFunction, AttenIntensity
 
 
 class TestCase():
@@ -142,9 +142,41 @@ class TestCase():
     def test_predict(self):
         """ for expectation """
         pass
-
-
-
     
+    def test_AttenIntensity(self):
+        datadir = '/Users/xiawenwen/workspace/tgnn/data/'
+        dataset = 'CollegeMsg'
+        G, embedding_matrix = tge.utils.read_file(datadir, dataset)
+        args = parse_args(['--layers','2', '--in_channels', '128', '--hidden_channels', '128', '--out_channels', '128', '--dropout', '0.0'])
+        args.time_encoder_maxt = G.maxt # from the dataset
+        args.time_encoder_args = {'maxt': args.time_encoder_maxt, 'rows': args.time_encoder_rows, 'dimension': args.time_encoder_dimension}
+        logger = None
+        model = get_model(G, embedding_matrix, args, logger)
+        train_set, val_set, test_set = tge.utils.get_dataset(G)
+        train_loader, val_loader, test_loader = tge.utils.get_dataloader(train_set, val_set, test_set, args)
+
+        model.prepare_hidden_rep()
+        batch = next(iter(train_loader))
+        uv, t = batch
+        u, v = uv[0]
+        T_all = t[0]
+        t, T = T_all[-1], T_all[:-1]
+
+        lambdaf = AttenIntensity(model)
+        lambda_t = lambdaf(u, v, T, t)
+        print(lambda_t)
+
+        ff = ConditionalDensityFunction(lambdaf)
+        f_t = ff(u, v, T, T[-1] + T[-1]-T[-2])
+        print(f_t)
+
+        pred = ff.predict(u, v, T)
+        print("T: {}".format(T.cpu().numpy()))
+        print("t: {:.4f}, pred: {:.4f}".format(t.cpu().item(), pred.cpu().item()))
+
+
+if __name__ == "__main__":
+    test = TestCase()
+    test.test_AttenIntensity()
 
 
