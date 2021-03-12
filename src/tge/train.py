@@ -74,9 +74,8 @@ class ConditionalDensityFunction():
             test_value = self(u, v, T, t_end)
         
         T_interval = t_end - T[-1]
-        size = 10
-        # t_samples = np.random.uniform(T[-1].cpu().item(), (T[-1]+T_interval).cpu().item(), size=size) # sampleing from a future interval -> too large variance
-        t_samples = torch.rand(size).to(device) * T_interval + T[-1] # FIXME: debug here
+        size = 30
+        t_samples = torch.linspace(T[-1]+1e-6, T[-1] + T_interval, size).to(device)
         values = torch.zeros_like(t_samples)
         for i, t in enumerate(t_samples):
             f_t = self(u, v, T, t)
@@ -383,8 +382,9 @@ def evaluate_state_dict(model, dataloaders, args, logger, **kwargs):
     state_dict_filename = args.state_dict
     device = get_device(args.gpu)
     recorder = Recorder(minmax={}, checkpoint_dir=args.checkpoint_dir, dataset=args.dataset, time_str=time_str)
-    model_states = recorder.load_model(time_str)
-    state_dict = model_states.get(state_dict_filename, None)
+    # model_states = recorder.load_model(time_str, state_dict_filename)
+    # state_dict = model_states.get(state_dict_filename, None)
+    state_dict = recorder.load_model(time_str, state_dict_filename)
     assert state_dict is not None, f"No {state_dict_filename}.state_dict in {args.dataset}/{time_str}/ dir"
     # import ipdb; ipdb.set_trace()
     model.load_state_dict(state_dict)
