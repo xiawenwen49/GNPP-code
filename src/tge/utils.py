@@ -6,12 +6,12 @@ import torch
 from pathlib import Path
 from torch.utils.data import DataLoader
 from torch.utils.data import Dataset
+from torch_geometric.data import InMemoryDataset, NeighborSampler
 
 
 # COMPLETED: clarify the dataset format
 # COMPLETED: implement temporal graph event model.
-# TODO: add deterministic time encoder/position encoding
-# TODO: try GRU/LSTM based lambda function
+# COMPLETED: add deterministic time encoder/position encoding
 
 
 def compute_max_interval(edgearray):
@@ -109,6 +109,17 @@ class EventDataset(Dataset):
             u, v = self.all_edges[index]
             # return torch.LongTensor([u, v]), torch.FloatTensor([self.G[u][v]['timestamp'][-1] ] ) # only return the last one, as label
             return torch.LongTensor([u, v]), torch.FloatTensor(self.G[u][v]['timestamp']) # return all,  the last one as label
+
+
+
+class TGNDataset(InMemoryDataset):
+    def __init__(self, ):
+        super(TGNDataset, self).__init__()
+        pass
+
+    def extract_enclosing_subgraphs(self):
+        pass
+
 
 
 def get_dataset(G, args=None):

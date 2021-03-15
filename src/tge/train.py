@@ -72,7 +72,7 @@ class ConditionalDensityFunction():
             if counter > 20:
                 break
             test_value = self(u, v, T, t_end)
-        
+
         T_interval = t_end - T[-1]
         size = 30
         t_samples = torch.linspace(T[-1]+1e-6, T[-1] + T_interval, size).to(device)
@@ -83,8 +83,8 @@ class ConditionalDensityFunction():
         
         values = (T_interval/size) * values # it should be probability now.
         values = values / (values.sum() + 1e-6) # normalilze, the result of this step should be similar with that of the former step.
-        estimated_expection = (values * t_samples).sum()
-        return estimated_expection
+        estimated_expectation = (values * t_samples).sum()
+        return estimated_expectation
 
 
 

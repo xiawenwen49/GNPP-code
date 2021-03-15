@@ -173,10 +173,15 @@ class TestCase():
         pred = ff.predict(u, v, T)
         print("T: {}".format(T.cpu().numpy()))
         print("t: {:.4f}, pred: {:.4f}".format(t.cpu().item(), pred.cpu().item()))
+    
+    def test_TGNDataset(self):
+        
+        pass
 
 
 if __name__ == "__main__":
     test = TestCase()
-    test.test_AttenIntensity()
+    # test.test_AttenIntensity()
+    test.test_TGNDataset()
 
 
