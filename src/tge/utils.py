@@ -6,12 +6,87 @@ import torch
 from pathlib import Path
 from torch.utils.data import DataLoader
 from torch.utils.data import Dataset
-from torch_geometric.data import InMemoryDataset, NeighborSampler
+from torch_geometric.data import Data, InMemoryDataset, NeighborSampler
+from torch_geometric.utils import k_hop_subgraph
 
 
 # COMPLETED: clarify the dataset format
 # COMPLETED: implement temporal graph event model.
 # COMPLETED: add deterministic time encoder/position encoding
+
+class EventDataset(Dataset):
+    def __init__(self, G, name):
+        self.G = G
+        self.name = name
+        self.all_edges = []
+        for edge in G.edges():
+            if len(G[edge[0]][edge[1]]['timestamp']) >= 5: # >= 5
+                self.all_edges.append(edge)
+        self.all_edges = self.all_edges[:40] # for debug
+    
+    def __len__(self):
+        return len(self.all_edges)
+
+    def __getitem__(self, index):
+        if self.name == 'train':
+            u, v = self.all_edges[index]
+            return torch.LongTensor([u, v]), torch.FloatTensor(self.G[u][v]['timestamp'][:-1] ) # return all timestamps except the last one, as train
+        else:
+            u, v = self.all_edges[index]
+            # return torch.LongTensor([u, v]), torch.FloatTensor([self.G[u][v]['timestamp'][-1] ] ) # only return the last one, as label
+            return torch.LongTensor([u, v]), torch.FloatTensor(self.G[u][v]['timestamp']) # return all,  the last one as label
+
+
+
+# TODO: 1, the usage of InMemoryDataset? Why InMemoryDataset? -> just to use its collate() function, to combine many samples to one
+# TODO: 2, the process() and extract_subgraph()? -> only static subgraph, regardless of timestamps
+class TGNDataset(InMemoryDataset):
+    def __init__(self, G, root, dataset):
+        """
+        Args:
+            G: nx obj, with all timestamps
+            root: str, root dir of a specific dataset, e.g., ./data/dataset1/
+            dataset: str, the dataset name, e.g., dataset1
+        """
+        self.G = G
+        self.root=root
+        self.dataset = dataset
+        self.edge_index = np.concatenate([ np.array(self.G.edges(), dtype=np.int), np.array(self.G.edges(), dtype=np.int)[:, [1,0]] ], axis=0 )
+        self.length_thres = 5
+        super(TGNDataset, self).__init__(root=root) # will run self.process()
+        self.data, self.slices = torch.load(self.processed_paths[0])
+    
+    @property
+    def processed_file_names(self):
+        # return ["{}.pt".format(self.dataset), ]
+        return ["train.pt", ]
+
+    def process(self):
+        """ Here nodepairs only contains those with len(timestamps)>length_thres """
+        nodepairs = []
+        for u, v in self.G.edges():
+            if len(self.G[u][v]['timestamp']) >= self.length_thres:
+                nodepairs.append([u, v])
+        
+        data_list = self.extract_enclosing_subgraphs(nodepairs, self.edge_index) # extract subgraph
+        data_list_storage = self.collect(data_list)
+        file_name = self.proposed_paths[0] # e.g., ./data/dataset1/`processed`/train.pt
+        torch.save(data_list_storage, file_name)
+
+
+    def extract_enclosing_subgraphs(self, nodepairs, edge_index):
+        """
+        Extract subgraphs for each node pair in nodepairs.
+        Here the extracted subgraph is based on all edge_index, regardless of timestamps.
+        Masking timestamps<=t with a specific `t` is done in model.forward().
+        """
+        data_list = []
+        for u, v in nodepairs:
+            sub_nodes, sub_edge_index, mapping, edge_mask = k_hop_subgraph((u, v), 2, edge_index)
+            data = Data(edge_index=sub_edge_index, nodepair=[u, v])
+            data_list.append(data)
+        return data_list
+
 
 
 def compute_max_interval(edgearray):
@@ -86,40 +161,6 @@ def read_file(datadir, dataset, directed=False, preprocess=True, logger=None, re
     if return_edgearray:
         return G, embedding_matrix, edgearray
     else: return G, embedding_matrix
-
-
-class EventDataset(Dataset):
-    def __init__(self, G, name):
-        self.G = G
-        self.name = name
-        self.all_edges = []
-        for edge in G.edges():
-            if len(G[edge[0]][edge[1]]['timestamp']) >= 5: # >= 5
-                self.all_edges.append(edge)
-        self.all_edges = self.all_edges[:40] # for debug
-    
-    def __len__(self):
-        return len(self.all_edges)
-
-    def __getitem__(self, index):
-        if self.name == 'train':
-            u, v = self.all_edges[index]
-            return torch.LongTensor([u, v]), torch.FloatTensor(self.G[u][v]['timestamp'][:-1] ) # return all timestamps except the last one, as train
-        else:
-            u, v = self.all_edges[index]
-            # return torch.LongTensor([u, v]), torch.FloatTensor([self.G[u][v]['timestamp'][-1] ] ) # only return the last one, as label
-            return torch.LongTensor([u, v]), torch.FloatTensor(self.G[u][v]['timestamp']) # return all,  the last one as label
-
-
-
-class TGNDataset(InMemoryDataset):
-    def __init__(self, ):
-        super(TGNDataset, self).__init__()
-        pass
-
-    def extract_enclosing_subgraphs(self):
-        pass
-
 
 
 def get_dataset(G, args=None):
