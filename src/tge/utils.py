@@ -1,11 +1,12 @@
+from time import time
 import numpy as np
 import networkx as nx
-import copy
-from pandas.core.indexes import interval
 import torch
+from tqdm import tqdm
 from pathlib import Path
-from torch.utils.data import DataLoader
+# from torch.utils.data import DataLoader
 from torch.utils.data import Dataset
+from torch_geometric.data import DataLoader
 from torch_geometric.data import Data, InMemoryDataset, NeighborSampler
 from torch_geometric.utils import k_hop_subgraph
 
@@ -38,10 +39,10 @@ class EventDataset(Dataset):
 
 
 
-# TODO: 1, the usage of InMemoryDataset? Why InMemoryDataset? -> just to use its collate() function, to combine many samples to one
-# TODO: 2, the process() and extract_subgraph()? -> only static subgraph, regardless of timestamps
+# COMPLETED: 1, the usage of InMemoryDataset? Why InMemoryDataset? -> just to use its collate() function, to combine many samples to one
+# COMPLETED: 2, the process() and extract_subgraph()? -> only static subgraph, regardless of timestamps
 class TGNDataset(InMemoryDataset):
-    def __init__(self, G, root, dataset):
+    def __init__(self, G, root, dataset=None):
         """
         Args:
             G: nx obj, with all timestamps
@@ -51,7 +52,7 @@ class TGNDataset(InMemoryDataset):
         self.G = G
         self.root=root
         self.dataset = dataset
-        self.edge_index = np.concatenate([ np.array(self.G.edges(), dtype=np.int), np.array(self.G.edges(), dtype=np.int)[:, [1,0]] ], axis=0 )
+        self.edge_index = torch.LongTensor( np.concatenate([ np.array(self.G.edges(), dtype=np.int), np.array(self.G.edges(), dtype=np.int)[:, [1,0]] ], axis=0 ).T )
         self.length_thres = 5
         super(TGNDataset, self).__init__(root=root) # will run self.process()
         self.data, self.slices = torch.load(self.processed_paths[0])
@@ -69,8 +70,8 @@ class TGNDataset(InMemoryDataset):
                 nodepairs.append([u, v])
         
         data_list = self.extract_enclosing_subgraphs(nodepairs, self.edge_index) # extract subgraph
-        data_list_storage = self.collect(data_list)
-        file_name = self.proposed_paths[0] # e.g., ./data/dataset1/`processed`/train.pt
+        data_list_storage = self.collate(data_list)
+        file_name = self.processed_paths[0] # e.g., ./data/dataset1/`processed`/train.pt
         torch.save(data_list_storage, file_name)
 
 
@@ -81,13 +82,11 @@ class TGNDataset(InMemoryDataset):
         Masking timestamps<=t with a specific `t` is done in model.forward().
         """
         data_list = []
-        for u, v in nodepairs:
-            sub_nodes, sub_edge_index, mapping, edge_mask = k_hop_subgraph((u, v), 2, edge_index)
-            data = Data(edge_index=sub_edge_index, nodepair=[u, v])
+        for u, v in tqdm(nodepairs, total=len(nodepairs)):
+            sub_nodes, sub_edge_index, mapping, edge_mask = k_hop_subgraph([u, v], 1, edge_index)
+            data = Data(x=sub_nodes, edge_index=sub_edge_index, nodepair=torch.LongTensor([u, v]))
             data_list.append(data)
         return data_list
-
-
 
 def compute_max_interval(edgearray):
     edges = edgearray[:, :2].astype(np.int)
@@ -113,8 +112,10 @@ def compute_max_interval(edgearray):
 def read_file(datadir, dataset, directed=False, preprocess=True, logger=None, return_edgearray=False):
     directory = Path(datadir) / dataset / (dataset + '.txt')
     edgearray = np.loadtxt(directory)
+    edgearray = edgearray[ edgearray[:, -1].argsort() ] # sort timestamped edges in ascending order
+    edgearray[:, -1] = edgearray[:, -1] - min(edgearray[:, -1]) # set earliest timestamp as 0
+
     edges = edgearray[:, :2].astype(np.int) 
-    edgearray[:, -1] = edgearray[:, -1] - min(edgearray[:, -1]) # the earliest as 0
     mask = edges[:, 0] != edges[:, 1] # 自己->自己的边不允许
     edges = edges[mask]
     edgearray = edgearray[mask]
@@ -128,13 +129,12 @@ def read_file(datadir, dataset, directed=False, preprocess=True, logger=None, re
     # change scale
     if preprocess:
         max_interval = compute_max_interval(edgearray)
-        # import ipdb; ipdb.set_trace()
-        scale = max_interval / (np.pi - 1e-6)
+        # scale = max_interval / (np.pi - 1e-6)
         scale = 360
         edgearray[:, -1] = edgearray[:, -1] / scale
-    # edgearray[:, -1] = edgearray[:, -1] / 360 # change scale
-    
-    for i, edge in enumerate(edges): # a list
+
+    # add timestamps to G    
+    for i, edge in enumerate(edges):
         if G[edge[0]][edge[1]].get('timestamp', None) is None:
             G[edge[0]][edge[1]]['timestamp'] = [edgearray[i][-1]]
         else:
@@ -162,12 +162,38 @@ def read_file(datadir, dataset, directed=False, preprocess=True, logger=None, re
         return G, embedding_matrix, edgearray
     else: return G, embedding_matrix
 
+def expand_edge_index_timestamp(G, sub_edge_index: torch.LongTensor, t: torch.float):
+    """ expand edge_index, according to legal timestamps, i.e., <=t """
+    device = t.device
+    sub_edge_index = sub_edge_index.cpu().numpy()
+    t = t.cpu.item()
+    exp_edge_index = []
+    exp_t = []
+    for (u, v) in sub_edge_index.T:
+        timestamps = np.array(G[u][v]['timestamp'])
+        if timestamps.min() > t:
+            continue
+        if timestamps.max() <= t:
+            pos = len(timestamps)
+        else:
+            pos = np.searchsorted(timestamps, t, side='right')
+
+        exp_edge_index.extend([[u, v]]*pos)
+        exp_t.extend(timestamps[:pos])
+    
+    exp_edge_index = torch.LongTensor(exp_edge_index).T.to(device)
+    exp_t = torch.FloatTensor(exp_t).to(device)
+    assert exp_t.shape[0] == exp_edge_index.shape[1], 'The length should be equal'
+    return exp_edge_index, exp_t
 
 def get_dataset(G, args=None):
-    """ (u, v), and timestamps between u v """
-    train_set = EventDataset(G, 'train')
-    val_set = EventDataset(G, 'val')
-    test_set = EventDataset(G, 'test')
+    # train_set = EventDataset(G, 'train')
+    # val_set = EventDataset(G, 'val')
+    # test_set = EventDataset(G, 'test')
+
+    train_set = TGNDataset(G, args.datadir/args.dataset)
+    val_set = TGNDataset(G, args.datadir/args.dataset)
+    test_set = TGNDataset(G, args.datadir/args.dataset)
     return train_set, val_set, test_set
 
 def get_dataloader(train_set, val_set, test_set, args):

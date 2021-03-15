@@ -3,6 +3,7 @@ import numpy as np
 import pandas as pd
 import warnings
 from tqdm import tqdm
+from torch_geometric.data import Data
 from tge.model import HarmonicEncoder, PositionEncoder
 from xww.utils.training import get_device, get_optimizer, Recorder
 from xww.utils.multiprocessing import MultiProcessor
@@ -33,8 +34,8 @@ class ConditionalIntensityFunction():
         """
         pass
 
-# TODO: f function
-# TODO: predict function
+# COMPLETED: f function
+# COMPLETED: predict function
 class ConditionalDensityFunction():
     """ the conditional density function f(t) """
     def __init__(self, lambdaf): # can not use self.lambda as variable name. `lambda` cannot appear as a variabel
@@ -118,9 +119,9 @@ class AttenIntensity(ConditionalIntensityFunction):
     def __init__(self, model):
         super(AttenIntensity, self).__init__(model)
     
-    def __call__(self, u, v, T, t):
+    def __call__(self, u, v, T, t, **kwargs):
         # COMPLETED: to support t as a batch
-        # COMPLETED: to debug
+        # TODO: add GNN in the lambda^{u, v}(t|H^{u,v}) computation
         assert isinstance(self.model.time_encoder, PositionEncoder), 'here the time encoder should be PositionEncoder'
         time_encoding_dim = self.model.time_encoder_args['dimension']
         emb_t = self.model.time_encoder(t)
@@ -136,10 +137,10 @@ class AttenIntensity(ConditionalIntensityFunction):
         atten_output, atten_output_weight = self.model.AttenModule(emb_t, emb_T, emb_T) # query, key, value. 
         atten_output = atten_output.squeeze(1)
         alpha = soft_plus(1, (self.model.alpha(u) * self.model.alpha(v)).sum() ) # alpha should > 0
-        value = soft_plus(alpha, atten_output @ self.model.W_H )
+        value = soft_plus(alpha, atten_output @ self.model.W_H ) # TODO: to add gnn representation
         return value
     
-    def integral(self, u, v, T, t_start, t_end, N=10):
+    def integral(self, u, v, T, t_start, t_end, N=10, **kwargs):
         """ by MC """
         if t_start is None:
             t_start = 0
@@ -148,13 +149,13 @@ class AttenIntensity(ConditionalIntensityFunction):
         device = model_device(self.model)
         points = torch.rand(N).to(device) * (t_end - t_start) + t_start
         # points = points.to(device)
-        values = self(u, v, T, points) # FIXME: to debug
+        values = self(u, v, T, points) # COMPLETED: to debug
         return (t_end - t_start)/N * values.sum()
 
 def soft_plus(phi, x):
     return phi * torch.log(1 + torch.exp( x / phi ))
 
-def log_likelihood(u, v, lambdaf, T):
+def log_likelihood(u, v, lambdaf, T, **kwargs):
     """
     Args:
         u, v: node pair
@@ -171,98 +172,11 @@ def log_likelihood(u, v, lambdaf, T):
     ll = ll1 - integral # log likelihood
     return ll
 
-# def predict(model, u, v, T):
-#     """ predict the next event time for (u, v), given historical times T between (u, v) """
-#     # lambdaf = HarmonicIntensity(model)
-#     lambdaf = AttenIntensity(model)
-#     f = ConditionalDensityFunction(lambdaf)
-
-#     intervals = T[1:] - T[:-1]
-#     max_interval = torch.max(intervals)
-#     # T_interval = 2*(T[-1] - T[0])
-#     T_interval = 200 * max_interval
-#     t_end = T[-1] + T_interval
-
-#     # import ipdb; ipdb.set_trace()
-#     counter = 0
-#     while (f(u, v, t_end, T) < 1e-4 or f(u, v, t_end, T) > 1e3) and t_end > T[-1]: # >1e6 for overflow
-#         t_end = (T[-1] + t_end)/2
-#         counter = counter + 1
-#         if counter > 100:
-#             break
-
-#     # t_start = T[-1]
-#     # while True:
-#     #     if f(u, v, t_end, T) < 1e-5:
-#     #         t_end = (t_start + t_end) / 2
-#     #     if f(u, v, t_end, T) > 1e-3:
-#     #         t_end = t_end + t_end - t_start
-#     #     if f(u, v, t_start, T) > 1e-3:
-#     #         t_start = (t_start + t_end) / 2
-#     #     if f(u, v, t_start, T) < 1e-5:
-#     #         t_start = min( t_start - (t_end - t_start), T[-1] )
-#     #
-#     #     counter = counter + 1
-#     #     if counter > 100:
-#     #         break
-#     # t_end = (t_start + t_end) / 2
-
-#     T_interval = (t_end - T[-1]).cpu().item()
-#     size = 10
-#     # t_samples = np.random.uniform(T[-1].cpu().item(), (T[-1]+T_interval).cpu().item(), size=size) # sampleing from a future interval -> too large variance
-#     t_samples = np.linspace(T[-1].cpu().item(), (T[-1]+T_interval).cpu().item(), num=size) + T_interval/size
-#     transformed_samples = []
-#     for t in t_samples:
-#         f_t = f(u, v, t, T) # item
-#         # transformed_samples.append( T_interval * f_t * t ) # importance sampling
-#         transformed_samples.append( f_t ) # used for area under f(t) for expectation
-    
-#     transformed_samples = np.array(transformed_samples)
-#     transformed_samples = transformed_samples * (T_interval/size) # it should be probability now.
-#     transformed_samples = transformed_samples / (np.sum(transformed_samples) + 1e-6) # normalilze, the result of this step should be similar with that of the former step.
-#     estimated_expection = np.sum(transformed_samples * t_samples)
-
-#     # estimated_expection = np.mean(transformed_samples)
-#     return estimated_expection
-
 def constant_1(model, hid_u, hid_v, emb_u, emb_v):
     return model.W_S_( torch.cat([hid_u, hid_v]).view(1, -1) ) + model.W_E_( torch.cat([emb_u, emb_v]).view(1, -1) )
 
 def model_device(model):
     return next(model.parameters()).device
-
-# def criterion():
-#     pass
-
-# def criterion(hidden_reps, embeddings, batch, model):
-#     """ compute negative log-likelihood """
-#     uv, t = batch
-#     u, v = uv[0] # assume batch_size=1
-#     T = t[0]
-#     # t = t - torch.min(t) # ?
-
-#     hid_u, hid_v = hidden_reps
-#     emb_u, emb_v = embeddings
-#     device = u.device
-#     # import ipdb; ipdb.set_trace()
-#     # event calculation
-#     C1 = constant_1(model, hid_u, hid_v, emb_u, emb_v)
-#     l1 = 0
-#     for i, t_i in enumerate(T):
-#         lambda_ti = torch.exp( C1 )
-#         if i >= 1:
-#             lambda_ti = lambda_ti + model.time_encoder.cos_encoding_mean(t_i - T[:i], u, v).sum()
-        
-#         l1 = l1 + (-torch.log(lambda_ti))
-    
-#     # import ipdb; ipdb.set_trace()
-#     # integral calculation
-#     l2 = T[-1]*torch.exp( C1 ) 
-#     l2 = l2 + model.time_encoder.sin_divide_omega_mean(T[-1] - T[:-1], u, v).sum()
-#     # l2 = l2 + model.time_encoder.alpha * torch.sum( torch.arange(1, len(T)).to(device) * (T[1:]-T[:-1]) ) # NOTE: new formula
-#     l2 = l2 + model.time_encoder.alpha[u][v] * ( T[-1] - T[0] ) # NOTE: amendment
-#     l = l1 + l2
-#     return l
 
 def criterion(model, batch, **kwargs):
     uv, t = batch
@@ -274,8 +188,7 @@ def criterion(model, batch, **kwargs):
     loss = -1 * ll # negative log likelihood
     return loss
 
-
-# TODO: no gnn, only self-attention for lambda function
+# COMPLETED: no gnn, only self-attention for lambda function
 def optimize_epoch(model, optimizer, train_loader, args, logger, **kwargs):
     model.train() # train mode
     device = get_device(args.gpu)
@@ -284,7 +197,11 @@ def optimize_epoch(model, optimizer, train_loader, args, logger, **kwargs):
     recorder = []
 
     for i, batch in tqdm(enumerate(train_loader), total=len(train_loader)):
-        batch = list(map(lambda x: x.to(device), batch)) # set device
+        if isinstance(batch, list):
+            batch = list(map(lambda x: x.to(device), batch)) # set device
+        elif isinstance(batch, Data):
+            batch = batch.to(device)
+
         lambdaf = kwargs.get('lambdaf')
         loss = criterion(model, batch, lambdaf=lambdaf)
 
@@ -394,3 +311,12 @@ def evaluate_state_dict(model, dataloaders, args, logger, **kwargs):
     train_loader, val_loader, test_loader = dataloaders
     results = evaluate(model, train_loader, test_loader, args, logger, lambdaf=lambdaf)
     logger.info(f"Eval, test_loss: {results['loss']:.4f}, test_rmse: {results['rmse']:.4f}, test_abs_ratio: {results['abs_ratio']:.4f}")
+
+
+
+
+
+
+
+
+

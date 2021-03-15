@@ -33,9 +33,9 @@ def parse_args(argstring=None):
     parser = argparse.ArgumentParser('Temporal GNNs.')
     
     # general settings
-    parser.add_argument('--root_dir', type=str, default=os.path.dirname(os.path.abspath(__file__)), help='Root directory' )
-    parser.add_argument('--checkpoint_dir', type=str, default=os.path.join(ROOT_DIR, 'checkpoint/'), help='Root directory' )
-    parser.add_argument('--datadir', type=str, default= os.path.join(ROOT_DIR, 'data/'), help='Dataset edge file name')
+    parser.add_argument('--root_dir', type=str, default=ROOT_DIR, help='Root directory' )
+    parser.add_argument('--checkpoint_dir', type=str, default=ROOT_DIR/'checkpoint/', help='Root directory' )
+    parser.add_argument('--datadir', type=str, default= ROOT_DIR/'data/', help='Dataset edge file name')
     parser.add_argument('--dataset', type=str, default='CollegeMsg', choices=['CollegeMsg', 'emailEuCoreTemporal', 'SMS-A', 'facebook-wall'], help='Dataset edge file name')
     parser.add_argument('--directed', type=bool, default=False, help='(Currently unavailable) whether to treat the graph as directed')
     parser.add_argument('--gpu', type=int, default=0, help='-1: cpu, others: gpu index')
@@ -75,7 +75,7 @@ def parse_args(argstring=None):
     # parser.add_argument('--time_encoder_deltas', type=float, default=0.5, help='scale of mean time interval for discretization')
 
     # logging and debug
-    parser.add_argument('--log_dir', type=str, default=os.path.join(ROOT_DIR, 'log/'), help='log directory')
+    parser.add_argument('--log_dir', type=str, default=ROOT_DIR/'log/', help='log directory')
     parser.add_argument('--save_log', default=True, action='store_true', help='save console log into log file')
     # parser.add_argument('--debug', default=False, action='store_true', help='debug mode')
     parser.add_argument('--desc', type=str, default='description_string', help='a string description for an experiment')

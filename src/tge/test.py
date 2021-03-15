@@ -17,16 +17,18 @@ class TestCase():
         pass
 
     def test_dataloader(self):
-        datadir = '/Users/xiawenwen/workspace/tgnn/data/CollegeMsg/'
-        dataset = 'CollegeMsg'
-        G, _ = tge.utils.read_file(datadir, dataset)
-        train_set, val_set, test_set = tge.utils.get_dataset(G)
-        train_loader, val_loader, test_loader = tge.utils.get_dataloader(train_set, val_set, test_set)
+        args = parse_args(['--layers','2', '--in_channels', '128', '--hidden_channels', '128', '--out_channels', '128', '--dropout', '0.0'])
+        G, _ = tge.utils.read_file(args.datadir, args.dataset)
+        train_set, val_set, test_set = tge.utils.get_dataset(G, args)
+        train_loader, val_loader, test_loader = tge.utils.get_dataloader(train_set, val_set, test_set, args)
 
         # import ipdb; ipdb.set_trace()
         for batch in train_loader:
-            assert len(batch[0]) > 0, 'Should be at least one timestamp'
-            # print(batch) # e.g. [tensor([[1028, 1339]]), tensor([[4823086., 4823270.]])]
+            assert batch.num_graphs == 1, 'Only support batch_size=1 now'
+            sub_nodes = batch.x
+            edge_index = batch.edge_index
+            [u, v] = batch.nodepair[0]
+            print(u, v)
 
         pass
 
@@ -175,13 +177,14 @@ class TestCase():
         print("t: {:.4f}, pred: {:.4f}".format(t.cpu().item(), pred.cpu().item()))
     
     def test_TGNDataset(self):
-        
+
         pass
 
 
 if __name__ == "__main__":
     test = TestCase()
     # test.test_AttenIntensity()
-    test.test_TGNDataset()
+    # test.test_TGNDataset()
+    test.test_dataloader()
 
 

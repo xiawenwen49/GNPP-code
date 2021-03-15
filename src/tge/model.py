@@ -5,6 +5,8 @@ import torch.nn as nn
 from torch import Tensor
 from torch_geometric.nn import MessagePassing, GATConv
 from torch_geometric.nn.inits import glorot
+from tge.utils import expand_edge_index_timestamp
+
 
 class TimeEncoder(nn.Module):
     def __init__(self, *args, **kwargs):
@@ -180,7 +182,24 @@ class TGN(nn.Module):
         glorot(self.W_E_.weight)
         self.clip_time_encoder_weight()
 
-    def forward(self, batch):
+    def forward(self, batch, t):
+        """ [u, v], and a subgraph in batch 
+        """
+        # [u, v], sub_edge_index = batch.nodepair, batch.edge_index
+        device = t.device
+        assert batch.num_graphs == 1, 'Only support batch_size=1 now'
+        sub_nodes = batch.x
+        sub_edge_index = batch.edge_index
+        u, v = batch.nodepair[0] # torch.LongTensor
+        
+        # extend edge_index and timestamps
+        exp_edge_index, exp_t = expand_edge_index_timestamp(self.G, sub_edge_index, t)
+
+        # model forward
+        # TODO: add layers
+        for layer in self.layers:
+            pass
+        
         return None
 
         uv, t = batch
@@ -223,6 +242,22 @@ class TGNLayer(MessagePassing):
         pass
 
     def initialize(self):
+        pass
+    
+    def forward(self, x, edge_index, ts, t):
+        """
+        Args:
+            x: last layer's features
+            edge_index: expanded edge_index
+            ts: expanded timestamps
+            t: the `current` time
+        """
+
+    
+    def message(self, x_j: Tensor, ts: Tensor) -> Tensor:
+        # TODO: transform computation
+
+
         pass
 
 
