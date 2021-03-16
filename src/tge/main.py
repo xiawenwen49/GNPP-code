@@ -102,7 +102,7 @@ def main():
     G, embedding_matrix = utils.read_file(args.datadir, args.dataset) # read graph and embeddings
 
     # dataloaders
-    train_set, val_set, test_set = utils.get_dataset(G)
+    train_set, val_set, test_set = utils.get_dataset(G, args)
     dataloaders = utils.get_dataloader(train_set, val_set, test_set, args)
     
     # build model

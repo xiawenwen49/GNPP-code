@@ -42,16 +42,18 @@ class EventDataset(Dataset):
 # COMPLETED: 1, the usage of InMemoryDataset? Why InMemoryDataset? -> just to use its collate() function, to combine many samples to one
 # COMPLETED: 2, the process() and extract_subgraph()? -> only static subgraph, regardless of timestamps
 class TGNDataset(InMemoryDataset):
-    def __init__(self, G, root, dataset=None):
+    def __init__(self, G, root, name=None):
         """
         Args:
             G: nx obj, with all timestamps
             root: str, root dir of a specific dataset, e.g., ./data/dataset1/
-            dataset: str, the dataset name, e.g., dataset1
+            # dataset: str, the dataset name, e.g., dataset1
+            name: 'train', 'val', 'test'
         """
         self.G = G
         self.root=root
-        self.dataset = dataset
+        # self.dataset = dataset
+        self.name=name
         self.edge_index = torch.LongTensor( np.concatenate([ np.array(self.G.edges(), dtype=np.int), np.array(self.G.edges(), dtype=np.int)[:, [1,0]] ], axis=0 ).T )
         self.length_thres = 5
         super(TGNDataset, self).__init__(root=root) # will run self.process()
@@ -85,7 +87,11 @@ class TGNDataset(InMemoryDataset):
         for u, v in tqdm(nodepairs, total=len(nodepairs)):
             sub_nodes, sub_edge_index, mapping, edge_mask = k_hop_subgraph([u, v], 1, edge_index, relabel_nodes=True)
             # confirmed: if relabel_nodes=True, new label of sub_nodes[i] is i, for new edge_index. 
-            data = Data(x=sub_nodes, edge_index=sub_edge_index, nodepair=torch.LongTensor([u, v]), mapping=mapping)
+            if self.name == 'train':
+                T = torch.tensor(self.G[u][v]['timestamp'][:-1])
+            else:
+                T = torch.tensor(self.G[u][v]['timestamp'])
+            data = Data(x=sub_nodes, edge_index=sub_edge_index, nodepair=torch.LongTensor([u, v]), mapping=mapping, T=T)
             data_list.append(data)
         return data_list
 
@@ -196,14 +202,14 @@ def expand_edge_index_timestamp(G, mapping, sub_nodes, sub_edge_index: torch.Lon
     assert exp_t.shape[0] == exp_edge_index.shape[1], 'The length should be equal'
     return exp_edge_index, exp_t
 
-def get_dataset(G, args=None):
+def get_dataset(G, args):
     # train_set = EventDataset(G, 'train')
     # val_set = EventDataset(G, 'val')
     # test_set = EventDataset(G, 'test')
 
-    train_set = TGNDataset(G, args.datadir/args.dataset)
-    val_set = TGNDataset(G, args.datadir/args.dataset)
-    test_set = TGNDataset(G, args.datadir/args.dataset)
+    train_set = TGNDataset(G, args.datadir/args.dataset, 'train')
+    val_set = TGNDataset(G, args.datadir/args.dataset, 'val')
+    test_set = TGNDataset(G, args.datadir/args.dataset, 'test')
     return train_set, val_set, test_set
 
 def get_dataloader(train_set, val_set, test_set, args):

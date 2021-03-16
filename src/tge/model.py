@@ -150,7 +150,7 @@ class TGN(nn.Module):
         # self.gru = torch.nn.GRU(input_size=time_encoder_args['dimension'], hidden_size=time_encoder_args['dimension'], num_layers=2)
         self.AttenModule = torch.nn.MultiheadAttention(time_encoder_args['dimension'], num_heads=1)
         self.alpha = torch.nn.Embedding(G.number_of_nodes(), 128)
-        self.W_H = torch.nn.Parameter(torch.zeros(time_encoder_args['dimension'], 1)) # column vector
+        self.W_H = torch.nn.Parameter(torch.zeros(2*hidden_channels+time_encoder_args['dimension'], 1)) # merger
 
         self.layers = nn.ModuleList()
         # TODO: add layers
@@ -251,7 +251,7 @@ class TGNLayer(MessagePassing):
         out = self.propagate(edge_index, x=x, ts=ts, t=t) # will invoke message function
         return out
     
-    def message(self, edge_index, x_j: Tensor, x_i: Tensor, ts: Tensor, t: Tensor) -> Tensor:
+    def message(self, edge_index, x_j: Tensor, x_i: Tensor, ts: Tensor, t: torch.float) -> Tensor:
         # COMPLETED: transform computation
         phi_ts = self.time_encoder(ts)
         phi_t = self.time_encoder( t.repeat(ts.shape[0]) )

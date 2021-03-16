@@ -134,6 +134,12 @@ class AttenIntensity(ConditionalIntensityFunction):
  
         atten_output, atten_output_weight = self.model.AttenModule(emb_t, emb_T, emb_T) # query, key, value. 
         atten_output = atten_output.squeeze(1)
+
+        batch = kwargs['batch']
+        uv_agg = self.model(batch, t.mean()) # t.mean() is an appro.
+        uv_agg = uv_agg.flatten().reshape((1, -1)).repeat((t.numel(), 1))
+        atten_output = torch.cat([atten_output, uv_agg], axis=1)
+
         alpha = soft_plus(1, (self.model.alpha(u) * self.model.alpha(v)).sum() ) # alpha should > 0
         value = soft_plus(alpha, atten_output @ self.model.W_H ) # TODO: to add gnn representation
         return value
@@ -147,7 +153,7 @@ class AttenIntensity(ConditionalIntensityFunction):
         device = model_device(self.model)
         points = torch.rand(N).to(device) * (t_end - t_start) + t_start
         # points = points.to(device)
-        values = self(u, v, T, points) # COMPLETED: to debug
+        values = self(u, v, T, points, batch=kwargs['batch']) # COMPLETED: to debug
         return (t_end - t_start)/N * values.sum()
 
 def soft_plus(phi, x):
@@ -164,8 +170,8 @@ def log_likelihood(u, v, lambdaf, T, **kwargs):
     ll1 = 0
     integral = 0
     for i, t in enumerate(T[1:]):
-        ll1 = ll1 + torch.log( lambdaf(u, v, T[:i+1], t) )
-        integral = integral + lambdaf.integral(u, v, T[:i+1], T[i], T[i+1])
+        ll1 = ll1 + torch.log( lambdaf(u, v, T[:i+1], t, batch=kwargs['batch']) )
+        integral = integral + lambdaf.integral(u, v, T[:i+1], T[i], T[i+1], batch=kwargs['batch'])
         pass
     ll = ll1 - integral # log likelihood
     return ll
@@ -177,12 +183,15 @@ def model_device(model):
     return next(model.parameters()).device
 
 def criterion(model, batch, **kwargs):
-    uv, t = batch
-    u, v = uv[0]
-    T = t[0]
+    # FIXME: batch now has no uv, t
+    u, v = batch.nodepair
+    T = batch.T
+    # uv, t = batch
+    # u, v = uv[0]
+    # T = t[0]
 
     lambdaf = kwargs['lambdaf']
-    ll = log_likelihood(u, v, lambdaf, T)
+    ll = log_likelihood(u, v, lambdaf, T, batch=batch)
     loss = -1 * ll # negative log likelihood
     return loss
 
