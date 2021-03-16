@@ -83,8 +83,9 @@ class TGNDataset(InMemoryDataset):
         """
         data_list = []
         for u, v in tqdm(nodepairs, total=len(nodepairs)):
-            sub_nodes, sub_edge_index, mapping, edge_mask = k_hop_subgraph([u, v], 1, edge_index)
-            data = Data(x=sub_nodes, edge_index=sub_edge_index, nodepair=torch.LongTensor([u, v]))
+            sub_nodes, sub_edge_index, mapping, edge_mask = k_hop_subgraph([u, v], 1, edge_index, relabel_nodes=True)
+            # confirmed: if relabel_nodes=True, new label of sub_nodes[i] is i, for new edge_index. 
+            data = Data(x=sub_nodes, edge_index=sub_edge_index, nodepair=torch.LongTensor([u, v]), mapping=mapping)
             data_list.append(data)
         return data_list
 
@@ -162,15 +163,17 @@ def read_file(datadir, dataset, directed=False, preprocess=True, logger=None, re
         return G, embedding_matrix, edgearray
     else: return G, embedding_matrix
 
-def expand_edge_index_timestamp(G, sub_edge_index: torch.LongTensor, t: torch.float):
+def expand_edge_index_timestamp(G, mapping, sub_nodes, sub_edge_index: torch.LongTensor, t: torch.float):
     """ expand edge_index, according to legal timestamps, i.e., <=t """
     device = t.device
     sub_edge_index = sub_edge_index.cpu().numpy()
-    t = t.cpu.item()
+    t = t.cpu().item()
     exp_edge_index = []
     exp_t = []
     for (u, v) in sub_edge_index.T:
-        timestamps = np.array(G[u][v]['timestamp'])
+        u_ = mapping[u] # original node number
+        v_ = mapping[v]
+        timestamps = np.array(G[u_][v_]['timestamp'])
         if timestamps.min() > t:
             continue
         if timestamps.max() <= t:
@@ -183,6 +186,13 @@ def expand_edge_index_timestamp(G, sub_edge_index: torch.LongTensor, t: torch.fl
     
     exp_edge_index = torch.LongTensor(exp_edge_index).T.to(device)
     exp_t = torch.FloatTensor(exp_t).to(device)
+
+    # add self loops
+    loop_index = torch.arange(0, len(sub_nodes), dtype=torch.long, device=device).reshape((1, -1)).repeat(2, 1)
+    loop_t = torch.zeros(len(sub_nodes), dtype=torch.long, device=device)
+    exp_edge_index = torch.cat([exp_edge_index, loop_index], axis=1)
+    exp_t = torch.cat([exp_t, loop_t], axis=0)
+
     assert exp_t.shape[0] == exp_edge_index.shape[1], 'The length should be equal'
     return exp_edge_index, exp_t
 

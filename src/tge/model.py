@@ -5,6 +5,7 @@ import torch.nn as nn
 from torch import Tensor
 from torch_geometric.nn import MessagePassing, GATConv
 from torch_geometric.nn.inits import glorot
+from torch_geometric.utils import softmax
 from tge.utils import expand_edge_index_timestamp
 
 
@@ -142,8 +143,7 @@ class TGN(nn.Module):
         super(TGN, self).__init__()
         self.G = G
         self.edgelist = torch.LongTensor( np.concatenate( [np.array(G.edges(), dtype=np.int).T, np.array(G.edges(), dtype=np.int).T[[1, 0], :]], axis=1 ) )
-        self.embedding = torch.nn.Embedding(embedding_matrix.shape[0], embedding_matrix.shape[1])
-        self.embedding.weight = torch.nn.Parameter(torch.FloatTensor(embedding_matrix), requires_grad=True) # NOTE: test
+        self.embedding = torch.nn.Embedding.from_pretrained( torch.FloatTensor(embedding_matrix), freeze=True )
         self.time_encoder_args = time_encoder_args
         # self.time_encoder = HarmonicEncoder(time_encoder_args['dimension'], G.number_of_nodes())
         self.time_encoder = PositionEncoder(time_encoder_args['maxt'], time_encoder_args['rows'], time_encoder_args['dimension'])
@@ -153,11 +153,12 @@ class TGN(nn.Module):
         self.W_H = torch.nn.Parameter(torch.zeros(time_encoder_args['dimension'], 1)) # column vector
 
         self.layers = nn.ModuleList()
+        # TODO: add layers
         for i in range(layers):
-            in_channels = self.layers[-1].heads*self.layers[-1].out_channels if i >= 1 else in_channels
-            heads = 8 if i < layers -1 else 1
-            self.layers.append(GATConv(in_channels=in_channels, out_channels=hidden_channels, heads=heads)) # use gat first
-            # self.layers.append( TGNLayer() )
+            # in_channels = self.layers[-1].heads*self.layers[-1].out_channels if i >= 1 else in_channels
+            # heads = 8 if i < layers -1 else 1
+            # self.layers.append(GATConv(in_channels=in_channels, out_channels=hidden_channels, heads=heads)) # use gat first
+            self.layers.append( TGNLayer(in_channels=in_channels, out_channels=hidden_channels, time_encoder=self.time_encoder) )
         self.act = nn.ReLU()
         self.dropout = nn.Dropout(p=dropout)
 
@@ -190,37 +191,22 @@ class TGN(nn.Module):
         assert batch.num_graphs == 1, 'Only support batch_size=1 now'
         sub_nodes = batch.x
         sub_edge_index = batch.edge_index
-        u, v = batch.nodepair[0] # torch.LongTensor
+        u, v = batch.nodepair # torch.LongTensor
         
         # extend edge_index and timestamps
-        exp_edge_index, exp_t = expand_edge_index_timestamp(self.G, sub_edge_index, t)
+        mapping = dict(zip(np.arange(sub_nodes.shape[0]), sub_nodes.cpu().numpy() ) )
+        exp_edge_index, exp_ts = expand_edge_index_timestamp(self.G, mapping, sub_nodes, sub_edge_index, t)
 
         # model forward
-        # TODO: add layers
+        out = self.embedding(sub_nodes) # sub graph all node embedding
         for layer in self.layers:
-            pass
+            out = layer(out, exp_edge_index, exp_ts, t)
+            # placeholder = torch.zeros_like(x)
+            # placeholder[]
+            assert out.shape[0] == len(sub_nodes)
         
-        return None
-
-        uv, t = batch
-        u, v = uv[0] # assume default batch_size = 1
-        # t = t[0]
-        # import ipdb; ipdb.set_trace()
-        device = u.device
-        if self.hidden_rep is not None:
-            out = self.hidden_rep[u], self.hidden_rep[v]
-        else:
-            nodes = torch.LongTensor(torch.arange(self.G.number_of_nodes())).to(device)
-            self.edgelist = self.edgelist.to(device) # set device
-            x = self.embedding(nodes)
-            for layer in self.layers:
-                x = layer(x, self.edgelist)
-                x = self.act(x)
-                x = self.dropout(x)
-            self.hidden_rep = x
-            out = self.hidden_rep[u], self.hidden_rep[v]
-
-        return out
+        nodepair_rep = out[batch.mapping]
+        return nodepair_rep
     
     def reset_hidden_rep(self):
         self.hidden_rep = None
@@ -237,7 +223,17 @@ class TGN(nn.Module):
         self.hidden_rep = x
 
 class TGNLayer(MessagePassing):
-    def __init__(self):
+    def __init__(self, in_channels, out_channels, time_encoder, heads=None ):
+        super(TGNLayer, self).__init__(aggr='add')
+        self.time_encoder = time_encoder
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.heads = heads # only one head now
+        # self.atten = torch.nn.MultiheadAttention()
+        self.Q = nn.Linear( in_channels+self.time_encoder.dimension, out_channels, bias=False)
+        self.K = nn.Linear( in_channels+self.time_encoder.dimension, out_channels, bias=False)
+        self.V = nn.Linear( in_channels+self.time_encoder.dimension, out_channels, bias=False)
+
         self.initialize()
         pass
 
@@ -247,18 +243,33 @@ class TGNLayer(MessagePassing):
     def forward(self, x, edge_index, ts, t):
         """
         Args:
-            x: last layer's features
+            x: here x should be all node's features, but where sub_nodes indicate is the last layer's features
             edge_index: expanded edge_index
             ts: expanded timestamps
             t: the `current` time
         """
-
+        out = self.propagate(edge_index, x=x, ts=ts, t=t) # will invoke message function
+        return out
     
-    def message(self, x_j: Tensor, ts: Tensor) -> Tensor:
-        # TODO: transform computation
+    def message(self, edge_index, x_j: Tensor, x_i: Tensor, ts: Tensor, t: Tensor) -> Tensor:
+        # COMPLETED: transform computation
+        phi_ts = self.time_encoder(ts)
+        phi_t = self.time_encoder( t.repeat(ts.shape[0]) )
+        x_j = torch.cat([x_j, phi_ts], axis=1)
+        x_i = torch.cat([x_i, phi_t], axis=1)
 
+        x_j = x_j.to(dtype=torch.float32, device=t.device)
+        x_i = x_i.to(dtype=torch.float32, device=t.device)
 
-        pass
+        Q = self.Q(x_i)
+        K = self.K(x_j)
+        V = self.V(x_j)
+
+        alpha = (Q * K).sum(axis=1)
+        alpha = softmax(alpha, edge_index[1]) # group according to x_i
+
+        out = V * alpha.unsqueeze(-1) # TODO: check
+        return out
 
 
 def get_model(G, embedding_matrix, args, logger):

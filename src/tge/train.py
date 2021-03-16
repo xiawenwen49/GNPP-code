@@ -128,12 +128,10 @@ class AttenIntensity(ConditionalIntensityFunction):
         emb_T = self.model.time_encoder(T)
         emb_t = emb_t.view(t.reshape(1, -1).shape[1], 1, time_encoding_dim)
         emb_T = emb_T.view(T.reshape(1, -1).shape[1], 1, time_encoding_dim)
-        if t.is_cuda:
-            emb_t = emb_t.type(torch.cuda.FloatTensor) # https://pytorch.org/docs/stable/generated/torch.nn.MultiheadAttention.html
-            emb_T = emb_T.type(torch.cuda.FloatTensor)
-        else:
-            emb_t = emb_t.type(torch.FloatTensor)
-            emb_T = emb_T.type(torch.FloatTensor)
+
+        emb_t = emb_t.to(dtype=torch.float32, device=t.device) # https://pytorch.org/docs/stable/generated/torch.nn.MultiheadAttention.html
+        emb_T = emb_T.to(dtype=torch.float32, device=t.device)
+ 
         atten_output, atten_output_weight = self.model.AttenModule(emb_t, emb_T, emb_T) # query, key, value. 
         atten_output = atten_output.squeeze(1)
         alpha = soft_plus(1, (self.model.alpha(u) * self.model.alpha(v)).sum() ) # alpha should > 0

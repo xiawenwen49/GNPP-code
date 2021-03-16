@@ -27,7 +27,7 @@ class TestCase():
             assert batch.num_graphs == 1, 'Only support batch_size=1 now'
             sub_nodes = batch.x
             edge_index = batch.edge_index
-            [u, v] = batch.nodepair[0]
+            [u, v] = batch.nodepair
             print(u, v)
 
         pass
@@ -65,22 +65,27 @@ class TestCase():
         pass
 
     def test_model(self):
-        datadir = '/Users/xiawenwen/workspace/tgnn/data/'
-        dataset = 'CollegeMsg'
-        G, embedding_matrix = tge.utils.read_file(datadir, dataset)
-        args = parse_args(['--layers','2', '--in_channels', '128', '--hidden_channels', '128', '--out_channels', '128', '--dropout', '0.0'])
-        # import ipdb; ipdb.set_trace()
+        args = parse_args(['--layers','1',])
+        G, embedding_matrix = tge.utils.read_file(args.datadir, args.dataset)
+        args.time_encoder_maxt = G.maxt # from the dataset
+        args.time_encoder_args = {'maxt': args.time_encoder_maxt, 'rows': args.time_encoder_rows, 'dimension': args.time_encoder_dimension}
+        
+        train_set, val_set, test_set = tge.utils.get_dataset(G, args)
+        train_loader, val_loader, test_loader = tge.utils.get_dataloader(train_set, val_set, test_set, args)
+
         logger = None
         model = get_model(G, embedding_matrix, args, logger)
-        train_set, val_set, test_set = tge.utils.get_dataset(G)
-        train_loader, val_loader, test_loader = tge.utils.get_dataloader(train_set, val_set, test_set)
-        import ipdb; ipdb.set_trace()
-        for batch in train_loader:
-            out = model(batch)
-            # import ipdb; ipdb.set_trace()
-            assert out[0].shape == (128,)
-        pass
 
+        # import ipdb; ipdb.set_trace()
+        for batch in train_loader:
+            assert batch.num_graphs == 1, 'Only support batch_size=1 now'
+            sub_nodes = batch.x
+            edge_index = batch.edge_index
+            [u, v] = batch.nodepair
+            out = model(batch, t=torch.tensor(10000.0, device='cpu'))
+            print(u, v)
+
+        
     def test_criterion(self):
         datadir = '/Users/xiawenwen/workspace/tgnn/data/'
         dataset = 'CollegeMsg'
@@ -185,6 +190,7 @@ if __name__ == "__main__":
     test = TestCase()
     # test.test_AttenIntensity()
     # test.test_TGNDataset()
-    test.test_dataloader()
+    # test.test_dataloader()
+    test.test_model()
 
 

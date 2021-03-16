@@ -50,7 +50,7 @@ def parse_args(argstring=None):
 
     # model training
     parser.add_argument('--model', type=str, default='TGN', choices=['TGN'], help='model name')
-    parser.add_argument('--layers', type=int, default=2, help='largest number of layers')
+    parser.add_argument('--layers', type=int, default=1, help='largest number of layers')
     parser.add_argument('--in_channels', type=int, default=128, help='input dim')
     parser.add_argument('--hidden_channels', type=int, default=128, help='hidden dim')
     parser.add_argument('--out_channels', type=int, default=128, help='output dim')
