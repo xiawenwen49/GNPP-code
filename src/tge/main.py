@@ -77,7 +77,7 @@ def parse_args(argstring=None):
     # logging and debug
     parser.add_argument('--log_dir', type=str, default=ROOT_DIR/'log/', help='log directory')
     parser.add_argument('--save_log', default=True, action='store_true', help='save console log into log file')
-    # parser.add_argument('--debug', default=False, action='store_true', help='debug mode')
+    parser.add_argument('--debug', default=False, action='store_true', help='debug mode')
     parser.add_argument('--desc', type=str, default='description_string', help='a string description for an experiment')
     parser.add_argument('--time_str', type=str, default=time.strftime('%Y_%m_%d_%H_%M_%S'), help='execution time')
     

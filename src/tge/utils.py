@@ -91,7 +91,20 @@ class TGNDataset(InMemoryDataset):
                 T = torch.tensor(self.G[u][v]['timestamp'][:-1])
             else:
                 T = torch.tensor(self.G[u][v]['timestamp'])
-            data = Data(x=sub_nodes, edge_index=sub_edge_index, nodepair=torch.LongTensor([u, v]), mapping=mapping, T=T)
+            
+            edgearray = []
+            new_old_map = dict(zip(range(len(sub_nodes)), sub_nodes.cpu().numpy()))
+            for i, (u, v) in enumerate(zip(sub_edge_index[0].cpu().numpy(), sub_edge_index[1].cpu().numpy())):
+                if self.name == 'train':
+                    timestamp = torch.tensor( self.G[ new_old_map[u] ][ new_old_map[v] ]['timestamp'][:-1] ).reshape(1, -1)
+                else:
+                    timestamp = torch.tensor( self.G[ new_old_map[u] ][ new_old_map[v] ]['timestamp'] ).reshape(1, -1)
+                e_ext = sub_edge_index[:, i].reshape(-1, 1).repeat(1, timestamp.numel())
+                e_ext = torch.cat([e_ext, timestamp], axis=0)
+                edgearray.append(e_ext)
+            edgearray = torch.cat(edgearray, axis=1).T # save all expanded edge-t into a Data() sample, to accelerate edge-t selection in model forward.
+
+            data = Data(x=sub_nodes, edge_index=sub_edge_index, nodepair=torch.LongTensor([u, v]), mapping=mapping, T=T, edgearray=edgearray)
             data_list.append(data)
         return data_list
 
@@ -169,38 +182,54 @@ def read_file(datadir, dataset, directed=False, preprocess=True, logger=None, re
         return G, embedding_matrix, edgearray
     else: return G, embedding_matrix
 
-def expand_edge_index_timestamp(G, mapping, sub_nodes, sub_edge_index: torch.LongTensor, t: torch.float):
-    """ expand edge_index, according to legal timestamps, i.e., <=t """
-    device = t.device
-    sub_edge_index = sub_edge_index.cpu().numpy()
-    t = t.cpu().item()
-    exp_edge_index = []
-    exp_t = []
-    for (u, v) in sub_edge_index.T:
-        u_ = mapping[u] # original node number
-        v_ = mapping[v]
-        timestamps = np.array(G[u_][v_]['timestamp'])
-        if timestamps.min() > t:
-            continue
-        if timestamps.max() <= t:
-            pos = len(timestamps)
-        else:
-            pos = np.searchsorted(timestamps, t, side='right')
 
-        exp_edge_index.extend([[u, v]]*pos)
-        exp_t.extend(timestamps[:pos])
-    
-    exp_edge_index = torch.LongTensor(exp_edge_index).T.to(device)
-    exp_t = torch.FloatTensor(exp_t).to(device)
+def expand_edge_index_timestamp(sub_nodes: torch.LongTensor, sub_edgearray: torch.LongTensor, t: torch.float):
+    index = sub_edgearray[:, 2] <= t
+    exp_edge_index = sub_edgearray[index, :2].to(dtype=torch.int64).T
+    exp_t = sub_edgearray[index, 2]
 
-    # add self loops
-    loop_index = torch.arange(0, len(sub_nodes), dtype=torch.long, device=device).reshape((1, -1)).repeat(2, 1)
-    loop_t = torch.zeros(len(sub_nodes), dtype=torch.long, device=device)
+    loop_index = torch.arange(0, len(sub_nodes), dtype=torch.long, device=t.device).reshape((1, -1)).repeat(2, 1)
+    loop_t = torch.zeros(len(sub_nodes), dtype=torch.float, device=t.device)
     exp_edge_index = torch.cat([exp_edge_index, loop_index], axis=1)
     exp_t = torch.cat([exp_t, loop_t], axis=0)
 
-    assert exp_t.shape[0] == exp_edge_index.shape[1], 'The length should be equal'
     return exp_edge_index, exp_t
+
+
+# def expand_edge_index_timestamp(G, mapping, sub_nodes, sub_edge_index: torch.LongTensor, t: torch.float):
+
+#     """ expand edge_index, according to legal timestamps, i.e., <=t """
+#     device = t.device
+#     sub_edge_index = sub_edge_index.cpu().numpy()
+#     t = t.cpu().item()
+#     exp_edge_index = []
+#     exp_t = []
+#     for (u, v) in sub_edge_index.T:
+#         u_ = mapping[u] # original node number
+#         v_ = mapping[v]
+#         timestamps = np.array(G[u_][v_]['timestamp'])
+#         if timestamps.min() > t:
+#             continue
+#         if timestamps.max() <= t:
+#             pos = len(timestamps)
+#         else:
+#             pos = np.searchsorted(timestamps, t, side='right')
+
+#         exp_edge_index.extend([[u, v]]*pos)
+#         exp_t.extend(timestamps[:pos])
+    
+
+#     exp_edge_index = torch.LongTensor(exp_edge_index).T.to(device)
+#     exp_t = torch.FloatTensor(exp_t).to(device)
+
+#     # add self loops
+#     loop_index = torch.arange(0, len(sub_nodes), dtype=torch.long, device=device).reshape((1, -1)).repeat(2, 1)
+#     loop_t = torch.zeros(len(sub_nodes), dtype=torch.long, device=device)
+#     exp_edge_index = torch.cat([exp_edge_index, loop_index], axis=1)
+#     exp_t = torch.cat([exp_t, loop_t], axis=0)
+
+#     assert exp_t.shape[0] == exp_edge_index.shape[1], 'The length should be equal'
+#     return exp_edge_index, exp_t
 
 def get_dataset(G, args):
     # train_set = EventDataset(G, 'train')

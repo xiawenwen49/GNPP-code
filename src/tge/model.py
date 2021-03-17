@@ -192,17 +192,15 @@ class TGN(nn.Module):
         sub_nodes = batch.x
         sub_edge_index = batch.edge_index
         u, v = batch.nodepair # torch.LongTensor
+        sub_edgearray = batch.edgearray
         
         # extend edge_index and timestamps
-        mapping = dict(zip(np.arange(sub_nodes.shape[0]), sub_nodes.cpu().numpy() ) )
-        exp_edge_index, exp_ts = expand_edge_index_timestamp(self.G, mapping, sub_nodes, sub_edge_index, t)
+        exp_edge_index, exp_ts = expand_edge_index_timestamp(sub_nodes, sub_edgearray, t)
 
         # model forward
         out = self.embedding(sub_nodes) # sub graph all node embedding
         for layer in self.layers:
             out = layer(out, exp_edge_index, exp_ts, t)
-            # placeholder = torch.zeros_like(x)
-            # placeholder[]
             assert out.shape[0] == len(sub_nodes)
         
         nodepair_rep = out[batch.mapping]

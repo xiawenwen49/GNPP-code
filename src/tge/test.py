@@ -72,7 +72,7 @@ class TestCase():
         
         train_set, val_set, test_set = tge.utils.get_dataset(G, args)
         train_loader, val_loader, test_loader = tge.utils.get_dataloader(train_set, val_set, test_set, args)
-
+        import ipdb; ipdb.set_trace()
         logger = None
         model = get_model(G, embedding_matrix, args, logger)
 
@@ -84,6 +84,7 @@ class TestCase():
             [u, v] = batch.nodepair
             out = model(batch, t=torch.tensor(10000.0, device='cpu'))
             print(u, v)
+            break
 
         
     def test_criterion(self):
