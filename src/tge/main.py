@@ -38,7 +38,7 @@ def parse_args(argstring=None):
     parser.add_argument('--datadir', type=str, default= ROOT_DIR/'data/', help='Dataset edge file name')
     parser.add_argument('--dataset', type=str, default='CollegeMsg', choices=['CollegeMsg', 'emailEuCoreTemporal', 'SMS-A', 'facebook-wall'], help='Dataset edge file name')
     parser.add_argument('--directed', type=bool, default=False, help='(Currently unavailable) whether to treat the graph as directed')
-    parser.add_argument('--gpu', type=int, default=0, help='-1: cpu, others: gpu index')
+    parser.add_argument('--gpu', type=int, default=1, help='-1: cpu, others: gpu index')
     parser.add_argument('--eval', type=str, default='', help='a time_str. evaluate model using checpoint_dir/dataset/time_str/state_dict_filename.state_dict')
     parser.add_argument('--state_dict', type=str, help='state_dict filename (without suffix)')
     parser.add_argument('--parallel_eval', default=None, action='store_true', help='parallel evaluate mode')

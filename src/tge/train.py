@@ -43,16 +43,16 @@ class ConditionalDensityFunction():
         # self.model = model
         self.lambdaf = lambdaf
     
-    def __call__(self, u, v, T, t):
+    def __call__(self, u, v, T, t, **kwargs):
         """ f^{u, v}(t|T_{u, v}) = \lambda^{u, v}(t|T_{u, v}) * \int_{0}^{max(T_{u, v})} \lambda(s) ds
         """
         assert t >= T.max(), 't should >= T.max(), i.e., t_n'
-        lambda_t = self.lambdaf(u, v, T, t)
-        integral = self.lambdaf.integral(u, v, T, T[-1], t)
+        lambda_t = self.lambdaf(u, v, T, t, **kwargs)
+        integral = self.lambdaf.integral(u, v, T, T[-1], t, **kwargs)
         f_t = lambda_t * torch.exp(-1 * integral)
         return f_t
     
-    def predict(self, u, v, T):
+    def predict(self, u, v, T, **kwargs):
         """ next event time expectation by MC
         """
         device = u.device
@@ -63,7 +63,7 @@ class ConditionalDensityFunction():
 
         # import ipdb; ipdb.set_trace()
         counter = 0
-        test_value = self(u, v, T, t_end)
+        test_value = self(u, v, T, t_end, **kwargs)
         while (test_value < 1e-3 or test_value > 0.1) and t_end > T[-1]: # >1e6 for overflow
             if test_value < 1e-3: # shrink
                 t_end = (T[-1] + t_end)/2
@@ -72,14 +72,15 @@ class ConditionalDensityFunction():
             counter = counter + 1
             if counter > 20:
                 break
-            test_value = self(u, v, T, t_end)
+            test_value = self(u, v, T, t_end, **kwargs)
 
         T_interval = t_end - T[-1]
-        size = 30
-        t_samples = torch.linspace(T[-1]+1e-6, T[-1] + T_interval, size).to(device)
+        size = 100
+        # import ipdb; ipdb.set_trace()
+        t_samples = torch.linspace(T[-1]+T_interval/size, T[-1] + T_interval, size).to(device)
         values = torch.zeros_like(t_samples)
         for i, t in enumerate(t_samples):
-            f_t = self(u, v, T, t)
+            f_t = self(u, v, T, t, **kwargs)
             values[i] = f_t.data.squeeze() # used for MC integral of t*f(t) dt
         
         values = (T_interval/size) * values # it should be probability now.
@@ -121,7 +122,7 @@ class AttenIntensity(ConditionalIntensityFunction):
     
     def __call__(self, u, v, T, t, **kwargs):
         # COMPLETED: to support t as a batch
-        # TODO: add GNN in the lambda^{u, v}(t|H^{u,v}) computation
+        # COMPLETED: add GNN in the lambda^{u, v}(t|H^{u,v}) computation
         assert isinstance(self.model.time_encoder, PositionEncoder), 'here the time encoder should be PositionEncoder'
         time_encoding_dim = self.model.time_encoder_args['dimension']
         emb_t = self.model.time_encoder(t)
@@ -183,7 +184,7 @@ def model_device(model):
     return next(model.parameters()).device
 
 def criterion(model, batch, **kwargs):
-    # FIXME: batch now has no uv, t
+    # COMPLETED: batch now has no uv, t
     u, v = batch.nodepair
     T = batch.T
     # uv, t = batch
@@ -196,6 +197,7 @@ def criterion(model, batch, **kwargs):
     return loss
 
 # COMPLETED: no gnn, only self-attention for lambda function
+# TODO: how to accelerate?/parallelization?
 def optimize_epoch(model, optimizer, train_loader, args, logger, **kwargs):
     model.train() # train mode
     device = get_device(args.gpu)
@@ -210,31 +212,45 @@ def optimize_epoch(model, optimizer, train_loader, args, logger, **kwargs):
             batch = batch.to(device)
 
         lambdaf = kwargs.get('lambdaf')
-        loss = criterion(model, batch, lambdaf=lambdaf)
-
-        batch_counter += 1
-        if batch_counter % 16 == 0: # update model parameters for one step
-            loss.backward()
-            # import ipdb; ipdb.set_trace()
-            optimizer.step()
-            optimizer.zero_grad()
-            # model.reset_hidden_rep() # reset hidden representation matrix
-            model.clip_time_encoder_weight()
-            batch_counter = 0
-        else:
-            loss.backward(retain_graph=True)
-        recorder.append(loss.item())
+        try:
+            loss = criterion(model, batch, lambdaf=lambdaf)
+            batch_counter += 1
+            if batch_counter % 8 == 0: # update model parameters for one step
+                loss.backward()
+                # import ipdb; ipdb.set_trace()
+                optimizer.step()
+                optimizer.zero_grad()
+                # model.reset_hidden_rep() # reset hidden representation matrix
+                # model.clip_time_encoder_weight()
+                batch_counter = 0
+                torch.cuda.empty_cache()
+            else:
+                # loss.backward(retain_graph=True)
+                loss.backward() # NOTE: only necessary when cached hidden rep of gnn model is used
+            recorder.append(loss.item())
+        except Exception as e:
+            if 'CUDA out of memory' in e.args[0]:
+                logger.info(f'CUDA out of memory for batch {i}, skipped.')
+            else: 
+                raise
 
     # model.prepare_hidden_rep() # update hidden_rep, for next optimize epoch or for evaluation
     return np.mean(recorder)
 
 def batch_evaluate(model, batch, **kwargs):
     device = model.W_S_.weight.device
-    batch = list(map(lambda x: x.to(device), batch)) # set device
-    uv, T_all = batch
-    u, v = uv[0] # only one sample
-    T_all = T_all[0]
+    if isinstance(batch, list):
+        batch = list(map(lambda x: x.to(device), batch)) # set device
+    elif isinstance(batch, Data):
+        batch = batch.to(device)
+
+    # uv, T_all = batch
+    # u, v = uv[0] # only one sample
+    # T_all = T_all[0]
+    u, v = batch.nodepair
+    T_all = batch.T
     T, t = T_all[:-1], T_all[-1]
+   
 
     lambdaf = kwargs.get('lambdaf')
     ff = ConditionalDensityFunction(lambdaf)
@@ -243,7 +259,7 @@ def batch_evaluate(model, batch, **kwargs):
     # loss = criterion(hidden_reps, embeddings, batch, model) # tensor
     # pred = predict(model, u, v, T)
     loss = criterion(model, batch, lambdaf=lambdaf) # tensor
-    pred = ff.predict(u, v, T)
+    pred = ff.predict(u, v, T, batch=batch)
     se = (pred - t)**2 # item
     se = se.cpu().item()
     abs = np.abs((pred - t).cpu().item())
