@@ -286,11 +286,11 @@ def expand_edge_index_timestamp(sub_nodes: torch.LongTensor, sub_edgearray: torc
 def get_dataset(G, args):
     # train_set = EventDataset(G, 'train')
 
-    train_set = TGNDataset(G, args.datadir/args.dataset, 'train')
-    test_set = TGNDataset(G, args.datadir/args.dataset, 'test')
+    # train_set = TGNDataset(G, args.datadir/args.dataset, 'train')
+    # test_set = TGNDataset(G, args.datadir/args.dataset, 'test')
     
-    # train_set = E2NDataset(G, args.datadir/args.dataset, 'train')
-    # test_set = E2NDataset(G, args.datadir/args.dataset, 'test')
+    train_set = E2NDataset(G, args.datadir/args.dataset, 'train')
+    test_set = E2NDataset(G, args.datadir/args.dataset, 'test')
     
     return train_set, None, test_set
 
