@@ -48,17 +48,17 @@ class ConditionalDensityFunction():
     
     def __call__(self, u, v, T, t, **kwargs):
         """ f^{u, v}(t|T_{u, v}) = \lambda^{u, v}(t|T_{u, v}) * \int_{0}^{max(T_{u, v})} \lambda(s) ds
-        TODO: to support batch computation of f(t), where t is a batch.
+        COMPLETED: to support batch computation of f(t), where t is a batch.
         make sure t.min() >= T.max().
 
         Args: 
             T: timestamps history, a batch
             t: to support t as a batch
         """
-        assert t.min() >= T.max(), 't should >= T.max(), i.e., t_n'
+        # assert t.min() >= T.max(), 't should >= T.max(), i.e., t_n'
         lambda_t = self.lambdaf(u, v, T, t, **kwargs)
-        integral = self.lambdaf.integral(u, v, T, T[-1], t, **kwargs) # KEY
-        # integral = integral.reshape
+        integral = self.lambdaf.integral(u, v, T, T[-1], t, **kwargs) # NOTE: integral() batch mode is the KEY.
+        integral = torch.clip(integral, -100, 100)
         f_t = lambda_t * torch.exp(-1 * integral)
         return f_t
     
@@ -67,15 +67,14 @@ class ConditionalDensityFunction():
         """
         device = u.device
         intervals = T[1:] - T[:-1]
-        max_interval = torch.max(intervals)
-        T_interval = 2 * max_interval
-        t_end = T[-1] + T_interval
+        max_interval = intervals.mean() + intervals.var()
+        # T_interval = 2 * max_interval
+        t_end = T[-1] + max_interval
 
-        # import ipdb; ipdb.set_trace()
         counter = 0
         test_value = self(u, v, T, t_end, **kwargs)
         while (test_value < 1e-3 or test_value > 0.1) and t_end > T[-1]: # >1e6 for overflow
-            if test_value < 1e-3: # shrink
+            if test_value < 1e-3 and t_end > T[-1]+1e-2: # shrink
                 t_end = (T[-1] + t_end)/2
             elif test_value > 0.1: # expand
                 t_end = t_end + (t_end - T[-1])/2
@@ -84,27 +83,26 @@ class ConditionalDensityFunction():
                 break
             test_value = self(u, v, T, t_end, **kwargs)
 
-        T_interval = t_end - T[-1]
+        T_interval = torch.abs(t_end - T[-1])
+        # T_interval = intervals.mean() + intervals.var() * 3
         size = 15
-
-        t_samples = torch.linspace(T[-1]+T_interval/size, T[-1] + T_interval, size).to(device) # NOTE: in order
+        t_samples = torch.linspace(T[-1]+T_interval/size , T[-1] + T_interval, size, device=device) # NOTE: in order
         # values = torch.zeros_like(t_samples)
         # for i, t in enumerate(t_samples):
         #     f_t = self(u, v, T, t, **kwargs)
         #     values[i] = f_t.data.squeeze() # used for MC integral of t*f(t) dt
         
         # NOTE: here it supports batch mode of t_samples
+        # if t_samples.min() < T[-1]:
+        #     import ipdb; ipdb.set_trace()
         values = self(u, v, T, t_samples, **kwargs)
-
         values = (T_interval/size) * values # it should be probability now.
+
         values = values / (values.sum() + 1e-6) # normalilze, the result of this step should be similar with that of the former step.
         t_samples = t_samples.reshape(-1, 1)
         assert t_samples.shape == values.shape
-        # values = values.flatten()
         estimated_expectation = (values * t_samples).sum()
         return estimated_expectation
-
-
 
 class HarmonicIntensity(ConditionalIntensityFunction):
     def __init__(self, model):
@@ -129,7 +127,7 @@ class HarmonicIntensity(ConditionalIntensityFunction):
         integral = (t_end - T[-1]) * torch.exp(C1) + torch.sum(self.model.time_encoder.sin_divide_omega_mean(t_end - T, u, v) - self.model.time_encoder.sin_divide_omega_mean(T[-1] - T, u, v))
         integral = integral + len(T) * self.model.time_encoder.alpha[u][v] * (t_end - T[-1]) # NOTE: new formula
         # integral = integral.item()
-        integral = torch.clamp(integral, -100, 100)
+        # integral = torch.clamp(integral, -100, 100)
         return integral
 
 class AttenIntensity(ConditionalIntensityFunction):
@@ -149,17 +147,18 @@ class AttenIntensity(ConditionalIntensityFunction):
         emb_t = emb_t.to(dtype=torch.float32, device=t.device) # https://pytorch.org/docs/stable/generated/torch.nn.MultiheadAttention.html
         emb_T = emb_T.to(dtype=torch.float32, device=t.device)
  
-        atten_output, atten_output_weight = self.model.AttenModule(emb_t, emb_T, emb_T) # query, key, value. 
+        atten_output, atten_output_weight = self.model.AttenModule(emb_t, emb_T, emb_T) # query, key, value.
         atten_output = atten_output.squeeze(1)
 
         batch = kwargs['batch']
-        uv_agg = self.model(batch, t.mean()) # t.mean() is an appro.
-        # uv_agg = self.model(batch, t.min()) # t.min() supports t as a batch, and is somewhat reasonable
-        uv_agg = uv_agg.flatten().reshape((1, -1)).repeat((t.numel(), 1))
-        atten_output = torch.cat([atten_output, uv_agg], axis=1)
+        # uv_agg = self.model(batch, t.mean()) # t.mean() is an appro.
+        uv_agg = self.model(batch, t.min()) # t.min() supports t as a batch, and is somewhat reasonable
+        uv_agg = uv_agg.reshape((1, -1)).repeat((t.numel(), 1))
+        atten_output = torch.cat([atten_output, uv_agg], axis=1) # COMPLETED: to add gnn representation
 
-        alpha = soft_plus(1, (self.model.alpha(u) * self.model.alpha(v)).sum() ) # alpha should > 0
-        value = soft_plus(alpha, atten_output @ self.model.W_H ) # COMPLETED: to add gnn representation
+        # alpha = relu_plus(1e-1, torch.dot(self.model.alpha(u), self.model.alpha(v)) ) # ensure alpha > 0
+        alpha = torch.nn.functional.sigmoid( torch.dot(self.model.alpha(u), self.model.alpha(v)) )
+        value = soft_plus(alpha, atten_output @ self.model.W_H ) # ensure >= 0
         return value
     
     def integral(self, u, v, T, t_start, t_end, N=10, **kwargs):
@@ -174,11 +173,7 @@ class AttenIntensity(ConditionalIntensityFunction):
         assert t_end.min() >= t_start
         assert t_start >= T.max(), 't_start should >= T.max(), i.e., t_n'
         device = u.device
-        # points = torch.rand(N).to(device) * (t_end - t_start) + t_start
-        # points = points.to(device)
-        # N_total = N * t_end.numel()
-        # points = torch.linspace(t_start+1, t_end[i], N_total).to(device) 
-        points = [torch.linspace(t_start+1, t_end[i], N) if i==0 else torch.linspace(t_end[i-1], t_end[i], N) for i in range(len(t_end)) ] # all interpoloted points[t_start, ..., t_end[0],  ]
+        points = [torch.linspace(t_start+1e-6, t_end[i], N, device=device) if i==0 else torch.linspace(t_end[i-1], t_end[i], N, device=device) for i in range(len(t_end)) ] # all interpoloted points[t_start, ..., t_end[0],  ]
         points = torch.cat(points).to(device)
         values = self(u, v, T, points, batch=kwargs['batch']) # NOTE: batch mode for interploted points is the KEY.
         
@@ -189,12 +184,19 @@ class AttenIntensity(ConditionalIntensityFunction):
 
         values = values * intervals # FIXED: shape problem
         values = values.cumsum(dim=0)
-        index = torch.arange(1, t_end.numel()+1).to(device) * N - 1
+        index = torch.arange(1, t_end.numel()+1, device=device) * N - 1
         return_values = values[index]
         return return_values
 
 def soft_plus(phi, x):
-    return phi * torch.log(1 + torch.exp( x / phi ))
+    return phi * torch.log(1 + 1e-1 + torch.exp( x / phi )) # it may cause gradient problem
+
+def relu_plus(phi, x):
+    return phi + torch.nn.functional.relu(x)
+
+# def relu_mult(phi, x):
+#     return 1e-6 + phi * torch.nn.functional.relu(x)
+
 
 def log_likelihood(u, v, lambdaf, T, **kwargs):
     """
@@ -207,7 +209,7 @@ def log_likelihood(u, v, lambdaf, T, **kwargs):
     ll1 = 0
     integral = 0
     for i, t in enumerate(T[1:]):
-        ll1 = ll1 + torch.log( lambdaf(u, v, T[:i+1], t, batch=kwargs['batch']) )
+        ll1 = ll1 + torch.log( lambdaf(u, v, T[:i+1], t, batch=kwargs['batch']) ) # here lambdaf will = 0 !
         integral = integral + lambdaf.integral(u, v, T[:i+1], T[i], T[i+1], batch=kwargs['batch'])
         pass
     ll = ll1 - integral # log likelihood
@@ -231,6 +233,12 @@ def criterion(model, batch, **kwargs):
     lambdaf = kwargs['lambdaf']
     ll = log_likelihood(u, v, lambdaf, T, batch=batch)
     loss = -1 * ll # negative log likelihood
+
+
+    if torch.isinf(loss) or torch.isnan(loss):
+        import ipdb; ipdb.set_trace()
+
+
     return loss
 
 # COMPLETED: no gnn, only self-attention for lambda function
@@ -255,7 +263,6 @@ def optimize_epoch(model, optimizer, train_loader, args, logger, **kwargs):
             batch_counter += 1
             if batch_counter % 8 == 0: # update model parameters for one step
                 loss.backward()
-                # import ipdb; ipdb.set_trace()
                 optimizer.step()
                 optimizer.zero_grad()
                 # model.reset_hidden_rep() # reset hidden representation matrix
@@ -263,12 +270,13 @@ def optimize_epoch(model, optimizer, train_loader, args, logger, **kwargs):
                 batch_counter = 0
                 # torch.cuda.empty_cache()
             else:
-                # loss.backward(retain_graph=True)
-                loss.backward() # NOTE: only necessary when cached hidden rep of gnn model is used
+                # loss.backward(retain_graph=True) # NOTE: only necessary when cached hidden rep of gnn model is used
+                loss.backward() 
             recorder.append(loss.item())
         except Exception as e:
             if 'CUDA out of memory' in e.args[0]:
-                logger.info(f'CUDA out of memory for batch {i}, skipped.')
+                # logger.info(f'CUDA out of memory for batch {i}, skipped.')
+                pass
             else: 
                 raise
         
@@ -286,31 +294,55 @@ def batch_evaluate(model, batch, **kwargs):
     elif isinstance(batch, Data):
         batch = batch.to(device)
 
-    # uv, T_all = batch
-    # u, v = uv[0] # only one sample
-    # T_all = T_all[0]
     u, v = batch.nodepair
     T_all = batch.T
     T, t = T_all[:-1], T_all[-1]
    
-
     lambdaf = kwargs.get('lambdaf')
     ff = ConditionalDensityFunction(lambdaf)
-    # hidden_reps = model(batch)
-    # embeddings = model.embedding(u), model.embedding(v)
-    # loss = criterion(hidden_reps, embeddings, batch, model) # tensor
-    # pred = predict(model, u, v, T)
+
+    # evaluate metrics
     loss = criterion(model, batch, lambdaf=lambdaf) # tensor
     pred = ff.predict(u, v, T, batch=batch)
     se = (pred - t)**2 # item
     se = se.cpu().item()
     abs = np.abs((pred - t).cpu().item())
     abs_ratio = abs / ((T_all[1:] - T_all[:-1]).mean().cpu().item() + 1e-6) # now the denominator is average interval
-    return {'loss': loss.item(), 'se': se, 'abs_ratio': abs_ratio}
+    
+    # COMPLETED: record T_all[1:]-T_all[:-1], pred - T_all[-1]. record ff( `some points` )
+    if kwargs.get('debug', None):
+        intervals = T[1:] - T[:-1]
+        # max_interval = intervals.mean() + intervals.var()
+        # t_end = T[-1] + max_interval
+        # counter = 0
+        # test_value = ff(u, v, T, t_end, batch=batch)
+        # while (test_value < 1e-3 or test_value > 0.1) and t_end > T[-1]: # >1e6 for overflow
+        #     if test_value < 1e-3 and t_end > T[-1]+1e-2: # shrink
+        #         t_end = (T[-1] + t_end)/2
+        #     elif test_value > 0.1: # expand
+        #         t_end = t_end + (t_end - T[-1])/2
+        #     counter = counter + 1
+        #     if counter > 20:
+        #         break
+        #     test_value = ff(u, v, T, t_end, batch=batch)
+        # T_interval = torch.abs(t_end - T[-1])
+        T_interval = intervals.mean() + intervals.var()
 
+        N = 100
+        points = torch.linspace(T[-1]+T_interval/N, T[-1]+T_interval, N, device=device)
+        f_values = ff(u, v, T, points, batch=batch)
+        f_values = f_values * T_interval / N
+        f_values = f_values.cpu().numpy().flatten()
 
-@profiler(Path(os.path.dirname(os.path.abspath(__file__)) ).parent.parent/'log'/'profile')
-def evaluate(model, train_loader, test_loader, args, logger, **kwargs):
+        intervals = (T_all[1:] - T_all[:-1]).cpu().numpy().flatten()
+        intervals = np.concatenate([intervals, pred.reshape(-1).cpu().numpy()] )
+        # need to record values, intervals
+        return {'loss': loss.item(), 'se': se, 'abs_ratio': abs_ratio, 'f_values': f_values, 'intervals': intervals}
+    else:
+        return {'loss': loss.item(), 'se': se, 'abs_ratio': abs_ratio}
+        
+# @profiler(Path(os.path.dirname(os.path.abspath(__file__)) ).parent.parent/'log'/'profile')
+def evaluate(model, test_loader, args, logger, **kwargs):
     model.eval() # eval mode
     device = get_device(args.gpu)
     model = model.to(device)
@@ -319,7 +351,7 @@ def evaluate(model, train_loader, test_loader, args, logger, **kwargs):
     se_recorder = [] # square error
     abs_ratio_recorder = [] # abs(pred-target) / target
     
-    if kwargs.get('parallel', None) is True:
+    if kwargs.get('parallel', None) is not None:
         # batch_evaluater = batch_evaluate_wraper(model, time_encoder, batch_evaluate)
         mp = MultiProcessor(40)
         # result = mp.run_imap(batch_evaluater, test_loader)
@@ -330,11 +362,18 @@ def evaluate(model, train_loader, test_loader, args, logger, **kwargs):
         abs_ratio_recorder = result['abs_ratio'].tolist()
     else:
         for i, batch_test in tqdm(enumerate(test_loader), total=len(test_loader)):
-            batch_result = batch_evaluate(model, batch_test, lambdaf=kwargs['lambdaf'])
+            with torch.no_grad():
+                batch_result = batch_evaluate(model, batch_test, lambdaf=kwargs['lambdaf'], debug=args.debug)
             loss_recorder.append(batch_result['loss'])
             se_recorder.append(batch_result['se'])
             abs_ratio_recorder.append(batch_result['abs_ratio'])
-            if args.debug and i == 20:
+            
+            if args.debug and kwargs.get('recorder', None) is not None:
+                recorder = kwargs['recorder']
+                recorder['f_values'].append(batch_result['f_values'])
+                recorder['intervals'].append(batch_result['intervals'])
+
+            if args.debug and i == 100:
                 break
     
     return {'loss': np.mean(loss_recorder), 'rmse': np.sqrt(np.mean(se_recorder)), 'abs_ratio': np.mean(abs_ratio_recorder)}
@@ -350,11 +389,8 @@ def train_model(model, dataloaders, args, logger):
     # logger.info(f"Without training, test_loss: {results['loss']:.4f}, test_rmse: {results['rmse']:.4f}, test_abs_ratio: {results['abs_ratio']:.4f}")
     for i in range(args.epochs):
         train_loss = optimize_epoch(model, optimizer, train_loader, args, logger, epoch=i, lambdaf=lambdaf)
-        if args.debug and i == 0:
-            break
-        recorder.append_model_state(model.state_dict())
-        recorder.save_model(latest=True)
-        results = evaluate(model, train_loader, test_loader, args, logger, epoch=i, lambdaf=lambdaf)
+        recorder.save_model(model, i=i)
+        results = evaluate(model, test_loader, args, logger, epoch=i, lambdaf=lambdaf)
         logger.info(f"Epoch {i}, train_loss: {train_loss:.4f}, test_loss: {results['loss']:.4f}, test_rmse: {results['rmse']:.4f}, test_abs_ratio: {results['abs_ratio']:.6f}")
         recorder.append_full_metrics({'loss': train_loss}, 'train')
         recorder.append_full_metrics({'loss': results['loss'], 'rmse': results['rmse'], 'abs_ratio': results['abs_ratio']}, 'test')
@@ -379,7 +415,9 @@ def evaluate_state_dict(model, dataloaders, args, logger, **kwargs):
     lambdaf = AttenIntensity(model)
     logger.info(f'Evaluate using {time_str} state_dict.')
     train_loader, val_loader, test_loader = dataloaders
-    results = evaluate(model, train_loader, test_loader, args, logger, lambdaf=lambdaf)
+    results = evaluate(model, test_loader, args, logger, lambdaf=lambdaf, recorder=recorder)
+    # import ipdb; ipdb.set_trace()
+    recorder.save_record()
     logger.info(f"Eval, test_loss: {results['loss']:.4f}, test_rmse: {results['rmse']:.4f}, test_abs_ratio: {results['abs_ratio']:.4f}")
 
 

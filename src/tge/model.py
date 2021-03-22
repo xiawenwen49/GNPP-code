@@ -137,6 +137,23 @@ class PositionEncoder(TimeEncoder):
         return position_encodings
 
 
+class TGN_e2n(nn.Module):
+    """
+    Devised for edge2node graph data.
+    Each data sample should be a star graph, each node represents an edge on original graph. 
+    Node timestamps are edge(node pair) timestamps on original graph
+    """
+    def __init__(self):
+        self.Atten_self = nn.MultiheadAttention()
+        self.Atten_neig = nn.MultiheadAttention()
+        self.Linear = nn.Linear()
+        pass
+
+    def forward(self, batch, t):
+        pass
+
+
+
 class TGN(nn.Module):
     """ Temporal graph event model """
     def __init__(self, G, embedding_matrix, time_encoder_args, layers, in_channels, hidden_channels, out_channels, dropout):

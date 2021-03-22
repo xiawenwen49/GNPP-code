@@ -1,4 +1,4 @@
-# Predict event time on temporal graphs using tgnn
+# Directly predict next event time on temporal graphs using tgnn
 
 A priminary idea.
 combine harmonic encoding with temporal point proces, e.g., hawkes process.
