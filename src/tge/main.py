@@ -36,7 +36,7 @@ def parse_args(argstring=None):
     parser.add_argument('--root_dir', type=str, default=ROOT_DIR, help='Root directory' )
     parser.add_argument('--checkpoint_dir', type=str, default=ROOT_DIR/'checkpoint/', help='Root directory' )
     parser.add_argument('--datadir', type=str, default= ROOT_DIR/'data/', help='Dataset edge file name')
-    parser.add_argument('--dataset', type=str, default='CollegeMsg', choices=['CollegeMsg', 'emailEuCoreTemporal', 'SMS-A', 'facebook-wall'], help='Dataset edge file name')
+    parser.add_argument('--dataset', type=str, default='Synthetic', choices=['CollegeMsg', 'Wikipedia', 'Reddit', 'Synthetic_hawkes', 'Synthetic_poisson', 'emailEuCoreTemporal', 'SMS-A', 'facebook-wall', 'Synthetic'], help='Dataset edge file name')
     parser.add_argument('--directed', type=bool, default=False, help='(Currently unavailable) whether to treat the graph as directed')
     parser.add_argument('--gpu', type=int, default=1, help='-1: cpu, others: gpu index')
     parser.add_argument('--eval', type=str, default='', help='a time_str. evaluate model using checpoint_dir/dataset/time_str/state_dict_filename.state_dict')
@@ -49,7 +49,7 @@ def parse_args(argstring=None):
     parser.add_argument('--test_ratio', type=float, default=0.2, help='test ratio in the used data samples')
 
     # model training
-    parser.add_argument('--model', type=str, default='TGN', choices=['TGN'], help='model name')
+    parser.add_argument('--model', type=str, default='TGN_e2n', choices=['TGN', 'TGN_e2n'], help='model name')
     parser.add_argument('--layers', type=int, default=1, help='largest number of layers')
     parser.add_argument('--in_channels', type=int, default=128, help='input dim')
     parser.add_argument('--hidden_channels', type=int, default=128, help='hidden dim')
@@ -59,19 +59,18 @@ def parse_args(argstring=None):
     
     parser.add_argument('--epochs', type=int, default=30, help='training epochs')
     parser.add_argument('--batch_size', type=int, default=1, help='mini batch size')
-    parser.add_argument('--lr', type=float, default=5*1e-4, help='learning rate')
-    parser.add_argument('--l2', type=float, default=1e-3, help='l2 regularization')
-    parser.add_argument('--optimizer', type=str, default='adam', help='optimizer (string)')
-    # parser.add_argument('--metric', type=str, default='acc', help='evaluation metric')
+    parser.add_argument('--lr', type=float, default=1e-3, help='learning rate')
+    parser.add_argument('--l2', type=float, default=0, help='l2 regularization') # 1e-4
+    parser.add_argument('--optim', type=str, default='adam', help='optimizer (string)')
 
     # important features
     # parser.add_argument('--in_features', type=int, default=9, help='initial input features of nodes')
     # parser.add_argument('--out_features', type=int, default=6, help='number of target classes')
 
     # parser.add_argument('--time_encoder_type', type=str, default='tat', choices=['tat', 'harmonic', 'empty'], help='time encoder type')
-    parser.add_argument('--time_encoder_maxt', type=float, default=3e6, help='time encoder maxt')
-    parser.add_argument('--time_encoder_rows', type=int, default=int(1e6), help='time encoder rows')
-    parser.add_argument('--time_encoder_dimension', type=int, default=128, help='time encoding dimension')
+    parser.add_argument('--time_encoder_maxt', type=float, default=300, help='time encoder maxt') # 3e6
+    parser.add_argument('--time_encoder_rows', type=int, default=int(30000), help='time encoder rows') # 1e6
+    parser.add_argument('--time_encoder_dimension', type=int, default=128, help='time encoding dimension') # 128
     # parser.add_argument('--time_encoder_deltas', type=float, default=0.5, help='scale of mean time interval for discretization')
 
     # logging and debug
@@ -99,12 +98,15 @@ def main():
     logger = log.set_up_log(args, sys_argv)
 
     # read in dataset
-    G, embedding_matrix = utils.read_file(args.datadir, args.dataset) # read graph and embeddings
+    graph_file = Path(args.datadir) / args.dataset / (args.dataset + '.txt')
+    relable_nodes = False if args.dataset == 'Synthetic' else True
+    G, embedding_matrix = utils.read_file(graph_file, relable_nodes=relable_nodes) # read graph
 
     # dataloaders
     train_set, val_set, test_set = utils.get_dataset(G, args)
     dataloaders = utils.get_dataloader(train_set, val_set, test_set, args)
     
+
     # build model
     args.time_encoder_maxt = G.maxt # from the dataset
     args.time_encoder_args = {'maxt': args.time_encoder_maxt, 'rows': args.time_encoder_rows, 'dimension': args.time_encoder_dimension}

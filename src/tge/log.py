@@ -16,7 +16,7 @@ def set_up_log(args, sys_argv):
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger()
     logger.setLevel(logging.DEBUG)
-    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    formatter = logging.Formatter('%(asctime)s - %(message)s')
     
     sh = logging.StreamHandler() # add command line stream handler
     sh.setLevel(logging.WARN)
@@ -33,8 +33,9 @@ def set_up_log(args, sys_argv):
     logger.info('Command line executed: python ' + ' '.join(sys_argv))
     logger.info('-'*40)
     # logger.info('Full args parsed:')
-    for key, value in vars(args).items():
-        logger.info('{}={}'.format(key, value))
+    print(vars(args))
+    # for key, value in vars(args).items():
+        # logger.info('{}={}'.format(key, value))
     logger.info('-'*40)
 
     return logger

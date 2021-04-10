@@ -182,8 +182,20 @@ class TestCase():
         print("T: {}".format(T.cpu().numpy()))
         print("t: {:.4f}, pred: {:.4f}".format(t.cpu().item(), pred.cpu().item()))
     
-    def test_TGNDataset(self):
+    def test_synthetic(self):
+        from tge.main import ROOT_DIR
+        from tge.utils import SyntheticSimulate
+        model = 'poisson' # hawkes, poisson, 
+        root = ROOT_DIR/'data'/'Synthetic_{}'.format(model)
+        syn = SyntheticSimulate(root, N=100, deg=4) # COMPLETED: update, to simulate other models
+        # syn.save_multiple()
 
+        syn.generate_simulations(model=model)
+
+
+
+    def test_sklearn(self):
+        from sklearn.linear_model import LinearRegression
         pass
 
 
@@ -192,6 +204,6 @@ if __name__ == "__main__":
     # test.test_AttenIntensity()
     # test.test_TGNDataset()
     # test.test_dataloader()
-    test.test_model()
+    test.test_synthetic()
 
 
