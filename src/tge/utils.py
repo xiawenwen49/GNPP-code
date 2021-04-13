@@ -65,7 +65,7 @@ class SYNDataset(InMemoryDataset):
         return ["train.pt", "test.pt"]
     
     def process(self):
-
+        # for multiple files
         # files = list(self.root.glob('*.txt'))
         # data_list_multiple = []
         # for graph_file in tqdm(files, total=len(files)):
@@ -91,13 +91,11 @@ class SYNDataset(InMemoryDataset):
 
 
 
-        data_list = self.extract_edge_subgraphs(nodepairs) # extract subgraph
+        data_list = self.extract_edge_subgraphs(nodepairs, rescale=100) # extract subgraph
         
-        train_idx = int(len(data_list)*0.8)
+        train_idx = int(len(data_list)*0.75)
         train_list = data_list[:train_idx]
         test_list = data_list[train_idx:]
-
-        # import ipdb; ipdb.set_trace()
 
         train_storage = self.collate(train_list)
         test_storage = self.collate(test_list)
@@ -105,26 +103,23 @@ class SYNDataset(InMemoryDataset):
         torch.save(test_storage, osp.join(self.processed_dir, self.processed_file_names[1]))
 
 
-    def extract_edge_subgraphs(self, nodepairs):
+    def extract_edge_subgraphs(self, nodepairs, rescale=1):
         """ 
         1. extract a subgraph enclosing an edge. 
         2, regard edges as nodes, it should be a star graph (for 1-hop subgraph).
         3. rename all nodes (edges in original graph)
 
         Each Data() sample:
-            x: nodes of the star edge subgraph, Integer
+            x: nodes of the edge subgraph, Integer
             edge_index: None
             e_nodes_target: a integer represents the original nodepair, Integer
-            e_nodes_exp: expanded node labels, Integer
-            e_nodes_ts: expanded timestamps with nodes, Float
+            e_nodes_exp: expanded edge-node labels, Integer
+            e_nodes_ts: expanded timestamps on edge-nodes, Float
         """
         data_list = []
         for edge in tqdm(nodepairs, total=len(nodepairs), leave=True):
-            e_node_label = (edge[0], edge[1]) if edge[0] < edge[1] else (edge[1], edge[0]) # the label of target edge in self.G_e2n
+            e_node_label = tuple( sorted(edge) ) # edge label in line graph
             edge_subgraph = nx.ego_graph(self.G_e2n, e_node_label, radius=1)
-            # new_old_map = dict(zip(range(edge_subgraph.number_of_nodes()), edge_subgraph.nodes))
-            # old_new_map = dict(zip(edge_subgraph.nodes, range(edge_subgraph.number_of_nodes())))
-            # edge_subgraph = nx.convert_node_labels_to_integers(edge_subgraph, first_label=0) # relabel the edge subgraph
 
             e_nodes_exp, e_nodes_ts = self.expand_node_timestamps(edge_subgraph) # integer, float
 
@@ -137,10 +132,12 @@ class SYNDataset(InMemoryDataset):
             nodepair = torch.LongTensor(edge)
             T = torch.FloatTensor(self.G[edge[0]][edge[1]]['timestamp'])
 
-            min_t = e_nodes_ts.min() - 1
-            scale = 1 if 'poisson' in str(self.root) else 100
-            e_nodes_ts = (e_nodes_ts - min_t)/scale
-            T = (T - min_t)/scale
+            # rescale and start from 0, for each subgraph sample
+            min_t = e_nodes_ts.min()
+            e_nodes_ts = e_nodes_ts - min_t
+            T = T - min_t
+            e_nodes_ts = e_nodes_ts/rescale
+            T = T/rescale
             
             data = Data(x=e_nodes, edge_index=e_edge_index, 
                         e_node_target=e_node_target, e_nodes_exp=e_nodes_exp, 
@@ -256,7 +253,6 @@ def compute_max_interval(edgearray):
 
 
 def read_file(graph_file, directed=False, rescale=False, return_edgearray=False, relable_nodes=True, logger=None, **kwargs):
-    # directory = Path(datadir) / dataset / (dataset + '.txt')
     edgearray = np.loadtxt(graph_file)
     edgearray = edgearray[ edgearray[:, -1].argsort() ] # sort timestamped edges in ascending order
     edgearray[:, -1] = edgearray[:, -1] - min(edgearray[:, -1]) # set earliest timestamp as 0
@@ -273,14 +269,13 @@ def read_file(graph_file, directed=False, rescale=False, return_edgearray=False,
     else:
         G = nx.Graph(edges)
     
-    # change scale
     if rescale:
-        max_interval = compute_max_interval(edgearray)
-        # scale = max_interval / (np.pi - 1e-6)
-        scale = 100.0 # 360
+        # max_interval = compute_max_interval(edgearray)
+        assert kwargs.get('scale', None) is not None
+        scale = kwargs['scale']
         timestamps = timestamps / scale
 
-    # add timestamps to G    
+    # add timestamps
     for i, edge in enumerate(edges):
         if G[edge[0]][edge[1]].get('timestamp', None) is None:
             G[edge[0]][edge[1]]['timestamp'] = [timestamps[i]]
@@ -332,7 +327,6 @@ def expand_edge_index_timestamp(sub_nodes: torch.LongTensor, sub_edgearray: torc
 
 def get_dataset(G, args):
     # train_set = EventDataset(G, 'train')
-
     # train_set = TGNDataset(G, args.datadir/args.dataset, 'train')
     # test_set = TGNDataset(G, args.datadir/args.dataset, 'test')
     
@@ -349,7 +343,6 @@ def get_dataloader(train_set, val_set, test_set, args):
     batch_size = args.batch_size
     pin_memory = False
     train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True, pin_memory=pin_memory)
-    # val_loader = DataLoader(val_set, batch_size=batch_size, shuffle=True, pin_memory=pin_memory)
     val_loader = None
     test_loader = DataLoader(test_set, batch_size=batch_size, shuffle=True, pin_memory=pin_memory)
     return train_loader, val_loader, test_loader

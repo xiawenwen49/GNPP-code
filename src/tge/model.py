@@ -245,7 +245,7 @@ class TGN_e2n(nn.Module):
         torch.nn.init.normal_(self.linear_weights)
         glorot(self.W_H)
 
-
+# TODO: multi-head ?
     def forward(self, batch, t):
         e_nodes_exp = batch.e_nodes_exp
         e_nodes_ts = batch.e_nodes_ts
