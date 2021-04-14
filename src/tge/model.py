@@ -25,28 +25,21 @@ class HarmonicEncoder(TimeEncoder):
         super(HarmonicEncoder, self).__init__()
         assert dimension % 2 == 0, 'dimension should be an even'
         self.dimension = dimension
-        # self.nnodes = nnodes
         self.basis_freq = torch.nn.Parameter((torch.from_numpy(1 / 5 ** np.linspace(1, 9, dimension//2))).float()) # omega_1, ..., omega_d
         self.phase_cos = torch.zeros(dimension//2, dtype=torch.float, requires_grad=False) # no gradient
         self.phase_sin = torch.zeros(dimension//2, dtype=torch.float, requires_grad=False)
-
-        # self.alpha = torch.nn.Parameter( torch.FloatTensor([1]) )
-        # self.alpha = torch.nn.Parameter( torch.ones(nnodes, nnodes) )
-        # self.alpha = torch.FloatTensor([1], requires_grad=False)
     
     def forward(self, ts):
         """ harmonic encoding mapping """
-        # ts: [N]
+        # ts shape: maybe [N]
         device = ts.device
         self.basis_freq = self.basis_freq.to(device)
         self.phase_cos = self.phase_cos.to(device)
         self.phase_sin = self.phase_sin.to(device)
 
         batch_size = ts.size(0)
-        ts = ts.view(batch_size, 1)# [N, L, 1]
-        # import ipdb; ipdb.set_trace()
+        ts = ts.view(batch_size, 1)# [N, 1]
         map_ts = ts * self.basis_freq.view(1, -1) # [N, dimension]
-        # map_ts += self.phase.view(1, -1)
         harmonic_cos = torch.cos(map_ts + self.phase_cos.view(1, -1))
         harmonic_sin = torch.sin(map_ts + self.phase_sin.view(1, -1))
         harmonic = math.sqrt(1/self.dimension) * torch.cat([harmonic_cos, harmonic_sin], axis=1)
@@ -174,8 +167,6 @@ class PositionEncoder(TimeEncoder):
         self.rows = rows
         self.deltat = maxt / rows
         self.dimension = dimension
-
-        # self.time_embedding = torch.nn.Embedding.from_pretrained( torch.tensor(self.get_timing_encoding_matrix(rows, dimension), dtype=torch.float32), freeze=True )
         self.time_embedding = torch.tensor(self.get_timing_encoding_matrix(rows, dimension), dtype=torch.float32)
 
     def forward(self, timestamps: Tensor):
@@ -212,7 +203,7 @@ class TGN_e2n(nn.Module):
     Each data sample should be a star graph, each node represents an edge on original graph. 
     Node timestamps are edge(node pair) timestamps on original graph
     """
-    def __init__(self, G, time_encoder_args, hidden_channels):
+    def __init__(self, G, time_encoder_args, num_heads, dropout):
         super(TGN_e2n, self).__init__()
         self.G = G
         self.G_e2n = nx.line_graph(G)
@@ -222,12 +213,11 @@ class TGN_e2n(nn.Module):
         self.time_encoder = HarmonicEncoder(time_encoder_args['dimension'])
         
         
-
-        self.Atten_self = nn.MultiheadAttention(embed_dim=time_encoder_args['dimension'], num_heads=1)
-        self.Atten_neig = nn.MultiheadAttention(embed_dim=time_encoder_args['dimension'], num_heads=1)
+        self.Atten_self = nn.MultiheadAttention(embed_dim=time_encoder_args['dimension'], num_heads=num_heads, dropout=dropout)
+        self.Atten_neig = nn.MultiheadAttention(embed_dim=time_encoder_args['dimension'], num_heads=num_heads, dropout=dropout)
         
         
-        self.Linear = nn.Linear(time_encoder_args['dimension']*2, 1)
+        self.Linear_lambda = nn.Linear(time_encoder_args['dimension']*2, 1)
         self.Linear_pred = nn.Linear(time_encoder_args['dimension']*2, 1)
         # self.Linear_pred = nn.Sequential(nn.Linear(time_encoder_args['dimension']*2, 128), nn.LeakyReLU(), nn.Linear(128, 1))
 
@@ -235,14 +225,14 @@ class TGN_e2n(nn.Module):
         self.phi = torch.nn.Parameter(torch.tensor([1.0]))
 
 
-        self.miu = torch.nn.Parameter(torch.zeros((1, 1)))
-        self.linear_weights = torch.nn.Parameter(torch.zeros((1, time_encoder_args['dimension'])))
+        # self.miu = torch.nn.Parameter(torch.zeros((1, 1)))
+        # self.linear_weights = torch.nn.Parameter(torch.zeros((1, time_encoder_args['dimension'])))
 
         self.initialize()
     
     def initialize(self,):
-        torch.nn.init.uniform_(self.miu)
-        torch.nn.init.normal_(self.linear_weights)
+        # torch.nn.init.uniform_(self.miu)
+        # torch.nn.init.normal_(self.linear_weights)
         glorot(self.W_H)
 
 # TODO: multi-head ?
@@ -286,7 +276,7 @@ class TGN_e2n(nn.Module):
         atten_output = torch.cat([self_atten_output, neig_atten_output], axis=2).squeeze(0)
         # atten_output = self_atten_output.squeeze(0)
 
-        lambdav = self.Linear(atten_output)
+        lambdav = self.Linear_lambda(atten_output)
         lambdav = soft_plus(self.phi, lambdav)
 
         # import ipdb; ipdb.set_trace()
@@ -504,7 +494,7 @@ def get_model(G, embedding_matrix, args, logger):
     if args.model == 'TGN':
         model = TGN(G, embedding_matrix, args.time_encoder_args, args.layers, args.in_channels, args.hidden_channels, args.out_channels, args.dropout)
     elif args.model == 'TGN_e2n':
-        model = TGN_e2n(G, args.time_encoder_args, args.hidden_channels)
+        model = TGN_e2n(G, args.time_encoder_args, args.num_heads, args.dropout)
     else:
         raise NotImplementedError("Not implemented now")
     return model

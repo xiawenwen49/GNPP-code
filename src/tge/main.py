@@ -54,7 +54,8 @@ def parse_args(argstring=None):
     parser.add_argument('--in_channels', type=int, default=128, help='input dim')
     parser.add_argument('--hidden_channels', type=int, default=128, help='hidden dim')
     parser.add_argument('--out_channels', type=int, default=128, help='output dim')
-    parser.add_argument('--dropout', type=float, default=0.1, help='dropout rate')
+    parser.add_argument('--num_heads', type=int, default=1, help='number of attention heads')
+    parser.add_argument('--dropout', type=float, default=0.0, help='dropout rate')
     parser.add_argument('--negative_slope', type=float, default=0.2, help='for leakey relu function')
     
     parser.add_argument('--epochs', type=int, default=30, help='training epochs')

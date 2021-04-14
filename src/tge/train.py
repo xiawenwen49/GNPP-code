@@ -288,9 +288,6 @@ def optimize_epoch(model, optimizer, train_loader, args, logger, **kwargs):
             # loss.backward(retain_graph=True)
             # for p in model.parameters():
 
-
-
-
             batch_counter += 1
             if batch_counter % 8 == 0: # update model parameters for one step
                 optimizer.step()
