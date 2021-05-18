@@ -197,13 +197,49 @@ class TestCase():
     def test_sklearn(self):
         from sklearn.linear_model import LinearRegression
         pass
+    
+    def test_GNNDatatset(self):
+        dataset = 'Wikipedia'
+        args = parse_args(['--dataset', dataset])
 
+        graph_file = Path(args.datadir) / args.dataset / (args.dataset + '.txt')
+        G, embedding_matrix = tge.utils.read_file(graph_file, relable_nodes=True)
+        train_set, val_set, test_set = tge.utils.get_dataset(G, args)
+        train_loader, val_loader, test_loader = tge.utils.get_dataloader(train_set, val_set, test_set, args)
+    
+    def test_synthetic_generate(self):
+        """ Generate synthetic datasets """
+        from tge.main import ROOT_DIR
+        from tge.utils import SyntheticGenerator
+        
+        model_name = 'poisson' # hawkes_pos, hawkes_neg, poisson,
+        root = ROOT_DIR/'data'/f'Synthetic_{model_name}'
+
+
+        syn = SyntheticGenerator(root, N=500, deg=2) # syn = SyntheticGenerator(root, N=2000, deg=3)
+        syn.generate_simulations(model_name=model_name)
+
+        # syn = SyntheticGenerator(root, N=0, deg=0)
+        # syn.generate_indenepdent_subgraphs(model_name=model_name, instances=10000)
+    
+    def test_read_synthetic_graph(self):
+        from tge.main import ROOT_DIR
+        from tge.utils import read_file
+        model_name = 'hawkes_neg' # hawkes_pos, hawkes_neg, poisson,
+        root = ROOT_DIR/'data'/f'Synthetic_{model_name}'
+        graph_file = root/f'Synthetic_{model_name}.txt'
+        G, _ = read_file(graph_file)
+        import ipdb; ipdb.set_trace()
+        pass
 
 if __name__ == "__main__":
     test = TestCase()
     # test.test_AttenIntensity()
     # test.test_TGNDataset()
     # test.test_dataloader()
-    test.test_synthetic()
+    # test.test_synthetic()
+    # test.test_GNNDatatset()
+    test.test_synthetic_generate()
+    # test.test_read_synthetic_graph()
 
 

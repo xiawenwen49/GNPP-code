@@ -1,8 +1,11 @@
-# Directly predict next event time on temporal graphs using tgnn
+# Introduction
 
-combining gnn framework with time-series inference framework
-maximize event sequence likelihood.
+This is the code for *Graph neural point process for temporal interaction prediction*, i.e., the GNPP model.
 
+## Notes
+- Experimental results (partial) are in ./src/tge/notebooks/results.ipynb
+
+- Other results (e.g., learned lambda scores, attention heatmap) are in http://10.4.1.95:8888/lab/tree/TGNN/src/tge/notebooks/exp_study.ipynb .
 
 <!-- ### Generate node2vec embeddings
 ```
@@ -15,17 +18,14 @@ python src/tge/software/node2vec/src/main.py --input ./data/CollegeMsg/CollegeMs
 python -m tge.main # default CollegeMsg dataset
 ``` -->
 
-
-
-
-
-# Synthetic dataset generation
+# Run instruction
+## Synthetic dataset generation
 ```
 python -m tge.test
 ```
 
-# Run tge model
+## Run the GNPP model
 ```
-python -m tge.main --epochs 100 --dataset Reddit
+./run.sh
 ```
 

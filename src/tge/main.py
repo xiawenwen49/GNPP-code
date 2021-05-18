@@ -9,12 +9,12 @@ import warnings
 from pathlib import Path
 from . import log
 from . import utils
-from .model import get_model, HarmonicEncoder
 from .train import train_model, evaluate_state_dict
+from .model import get_model
 
 
 warnings.filterwarnings("ignore", message=r"Passing", category=FutureWarning)
-torch.autograd.set_detect_anomaly(True)
+# torch.autograd.set_detect_anomaly(True)
 
 
 ROOT_DIR = Path(os.path.dirname(os.path.abspath(__file__)) ).parent.parent
@@ -36,7 +36,7 @@ def parse_args(argstring=None):
     parser.add_argument('--root_dir', type=str, default=ROOT_DIR, help='Root directory' )
     parser.add_argument('--checkpoint_dir', type=str, default=ROOT_DIR/'checkpoint/', help='Root directory' )
     parser.add_argument('--datadir', type=str, default= ROOT_DIR/'data/', help='Dataset edge file name')
-    parser.add_argument('--dataset', type=str, default='Synthetic', choices=['CollegeMsg', 'Wikipedia', 'Reddit', 'Synthetic_hawkes', 'Synthetic_poisson', 'emailEuCoreTemporal', 'SMS-A', 'facebook-wall', 'Synthetic'], help='Dataset edge file name')
+    parser.add_argument('--dataset', type=str, default='Wikipedia', choices=['CollegeMsg', 'Wikipedia', 'Reddit', 'Synthetic_hawkes_neg', 'Synthetic_hawkes_pos', 'Synthetic_poisson', 'emailEuCoreTemporal', 'SMS-A', 'facebook-wall', 'Synthetic'], help='Dataset edge file name')
     parser.add_argument('--directed', type=bool, default=False, help='(Currently unavailable) whether to treat the graph as directed')
     parser.add_argument('--gpu', type=int, default=1, help='-1: cpu, others: gpu index')
     parser.add_argument('--eval', type=str, default='', help='a time_str. evaluate model using checpoint_dir/dataset/time_str/state_dict_filename.state_dict')
@@ -48,31 +48,28 @@ def parse_args(argstring=None):
     parser.add_argument('--data_usage', type=float, default=1.0, help='ratio of used data for all data samples')
     parser.add_argument('--test_ratio', type=float, default=0.2, help='test ratio in the used data samples')
 
-    # model training
-    parser.add_argument('--model', type=str, default='TGN_e2n', choices=['TGN', 'TGN_e2n'], help='model name')
+    # model parameter
+    parser.add_argument('--model', type=str, default='GNPP', choices=['GNPP', 'GAT', 'GraphSAGE'], help='model name')
     parser.add_argument('--layers', type=int, default=1, help='largest number of layers')
     parser.add_argument('--in_channels', type=int, default=128, help='input dim')
     parser.add_argument('--hidden_channels', type=int, default=128, help='hidden dim')
     parser.add_argument('--out_channels', type=int, default=128, help='output dim')
     parser.add_argument('--num_heads', type=int, default=1, help='number of attention heads')
-    parser.add_argument('--dropout', type=float, default=0.0, help='dropout rate')
+    parser.add_argument('--dropout', type=float, default=0.1, help='dropout rate')
     parser.add_argument('--negative_slope', type=float, default=0.2, help='for leakey relu function')
+    parser.add_argument('--with_neig', type=int, default=1, help='1: with neighbor, 0: without neighbor')
     
     parser.add_argument('--epochs', type=int, default=30, help='training epochs')
     parser.add_argument('--batch_size', type=int, default=1, help='mini batch size')
-    parser.add_argument('--lr', type=float, default=1e-3, help='learning rate')
-    parser.add_argument('--l2', type=float, default=0, help='l2 regularization') # 1e-4
+    parser.add_argument('--lr', type=float, default=1e-4, help='learning rate')
+    parser.add_argument('--l2', type=float, default=1e-3, help='l2 regularization') # 1e-4
     parser.add_argument('--optim', type=str, default='adam', help='optimizer (string)')
 
-    # important features
-    # parser.add_argument('--in_features', type=int, default=9, help='initial input features of nodes')
-    # parser.add_argument('--out_features', type=int, default=6, help='number of target classes')
-
-    # parser.add_argument('--time_encoder_type', type=str, default='tat', choices=['tat', 'harmonic', 'empty'], help='time encoder type')
+    # time encoder params
+    parser.add_argument('--time_encoder_type', type=str, choices=['pe', 'fe', 'he'], default='pe', help='time encoder type')
     parser.add_argument('--time_encoder_maxt', type=float, default=300, help='time encoder maxt') # 3e6
     parser.add_argument('--time_encoder_rows', type=int, default=int(30000), help='time encoder rows') # 1e6
-    parser.add_argument('--time_encoder_dimension', type=int, default=128, help='time encoding dimension') # 128
-    # parser.add_argument('--time_encoder_deltas', type=float, default=0.5, help='scale of mean time interval for discretization')
+    parser.add_argument('--time_encoder_dimension', type=int, default=512, help='time encoding dimension') # 128, 512
 
     # logging and debug
     parser.add_argument('--log_dir', type=str, default=ROOT_DIR/'log/', help='log directory')
@@ -110,7 +107,7 @@ def main():
 
     # build model
     args.time_encoder_maxt = G.maxt # from the dataset
-    args.time_encoder_args = {'maxt': args.time_encoder_maxt, 'rows': args.time_encoder_rows, 'dimension': args.time_encoder_dimension}
+    args.time_encoder_args = {'maxt': args.time_encoder_maxt, 'rows': args.time_encoder_rows, 'dimension': args.time_encoder_dimension, 'type': args.time_encoder_type}
     model = get_model(G, embedding_matrix, args, logger)
 
     if args.eval != '':

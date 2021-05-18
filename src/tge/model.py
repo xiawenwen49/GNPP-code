@@ -1,10 +1,12 @@
 import numpy as np
 import math
 import networkx as nx
+from numpy.lib.function_base import _insert_dispatcher
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch import Tensor
-from torch_geometric.nn import MessagePassing, GATConv
+from torch_geometric.nn import MessagePassing
 from torch_geometric.nn.inits import glorot
 from torch_geometric.utils import softmax
 from tge.utils import expand_edge_index_timestamp
@@ -21,7 +23,7 @@ class TimeEncoder(nn.Module):
 class HarmonicEncoder(TimeEncoder):
     """ In paper 'Inductive representation learning on temporal graphs'
     """
-    def __init__(self, dimension, nnodes=None):
+    def __init__(self, dimension):
         super(HarmonicEncoder, self).__init__()
         assert dimension % 2 == 0, 'dimension should be an even'
         self.dimension = dimension
@@ -42,8 +44,51 @@ class HarmonicEncoder(TimeEncoder):
         map_ts = ts * self.basis_freq.view(1, -1) # [N, dimension]
         harmonic_cos = torch.cos(map_ts + self.phase_cos.view(1, -1))
         harmonic_sin = torch.sin(map_ts + self.phase_sin.view(1, -1))
-        harmonic = math.sqrt(1/self.dimension) * torch.cat([harmonic_cos, harmonic_sin], axis=1)
+        harmonic = math.sqrt(1/(self.dimension//2)) * torch.cat([harmonic_cos, harmonic_sin], axis=1)
         return harmonic
+    
+    def forward_batch(self, ts):
+        """ ts: [N, L] -> [N, L, dimension]
+        """
+        device = ts.device
+        self.basis_freq = self.basis_freq.to(device)
+        self.phase_cos = self.phase_cos.to(device)
+        self.phase_sin = self.phase_sin.to(device)
+
+        ts = ts.unsqueeze(-1)
+        # self.basis_freq = self.basis_freq.view((1, 1, self.basis_freq.numel()))
+        # self.phase_cos = self.phase_cos.view((1, 1, self.phase_cos.numel()))
+        # self.phase_sin = self.phase_sin.view((1, 1, self.phase_sin.numel()))
+
+
+        map_ts = ts * self.basis_freq.view((1, 1, self.basis_freq.numel()) ) # [N, L, dimension]
+        harmonic_cos = torch.cos(map_ts + self.phase_cos.view((1, 1, self.phase_cos.numel())) )
+        harmonic_sin = torch.sin(map_ts + self.phase_sin.view((1, 1, self.phase_sin.numel())) )
+        harmonic = math.sqrt(1/self.dimension) * torch.cat([harmonic_cos, harmonic_sin], axis=-1)
+        return harmonic
+    
+    def fit(self, X: np.array, y: np.array):
+        X = torch.tensor(X)
+        y = torch.tensor(y)
+        X0 = torch.zeros_like(X)
+
+        optimizer = torch.optim.Adam( filter(lambda p: p.requires_grad, self.parameters()), lr=1e-2)
+        for i in range(1000):
+            # import ipdb; ipdb.set_trace()
+            mse = ( (self(X) * self(X0)).sum(axis=1) - y).square().mean()
+            optimizer.zero_grad()
+            mse.backward()
+            optimizer.step()
+            if (i+1) % 2 == 0:
+                print('epoch: {}, loss: {}, rmse: {}'.format(i, mse.cpu().item(), mse.cpu().sqrt().item()))
+
+    def predict(self, X: np.array):
+        X = torch.tensor(X)
+        X0 = torch.zeros_like(X)
+        with torch.no_grad():
+            pred = (self(X) * self(X0)).sum(axis=1)
+            # import ipdb; ipdb.set_trace()
+            return pred.cpu().numpy()
     
     def cos_encoding_mean(self, ts, u, v):
         """ ts should be t_1 - t_2 
@@ -92,6 +137,9 @@ class HarmonicEncoder(TimeEncoder):
         # self.alpha = torch.nn.Parameter(self.alpha.clamp(1e-6, 1e8))
 
 class FourierEncoder(TimeEncoder):
+    """ Not the `Fourier encoder` in `Deep Fourier Kernel for Self-attentive Point Processes`.
+    But only output a scalar. 
+    """
     def __init__(self, maxt=1000, dimension: int=128, **kwargs):
         super(FourierEncoder, self).__init__()
         self.maxt = maxt
@@ -103,24 +151,8 @@ class FourierEncoder(TimeEncoder):
 
         pass
 
-    # def forward(self, timestamps):
-    #     """ Fourier approximation output (scalar) """
-    #     device = timestamps[0].device
-    #     self.alpha0 = self.alpha0.to(device)
-    #     self.alpha = self.alpha.to(device)
-    #     self.beta = self.beta.to(device)
-    #     self.n_omega0 = self.n_omega0.to(device)
-
-    #     timestamps = timestamps.reshape((-1, 1))
-    #     phase = timestamps * self.n_omega0
-    #     cos = torch.cos(phase) * self.alpha
-    #     sin = torch.sin(phase) * self.beta
-    #     res = (cos + sin).sum(axis=1) + 0.5 * self.alpha0
-    #     res = soft_plus(0.1, res)
-    #     return res
-    
     def forward(self, timestamps):
-        """ embedding """
+        """ Fourier approximation output (scalar) """
         device = timestamps[0].device
         self.alpha0 = self.alpha0.to(device)
         self.alpha = self.alpha.to(device)
@@ -129,10 +161,26 @@ class FourierEncoder(TimeEncoder):
 
         timestamps = timestamps.reshape((-1, 1))
         phase = timestamps * self.n_omega0
-        cos = torch.cos(phase)
-        sin = torch.sin(phase)
-        output = torch.cat([cos, sin], axis=1)
-        return output
+        cos = torch.cos(phase) * self.alpha
+        sin = torch.sin(phase) * self.beta
+        res = (cos + sin).sum(axis=1) + 0.5 * self.alpha0
+        # res = soft_plus(0.1, res)
+        return res
+    
+    # def forward(self, timestamps):
+    #     """ constant fourier embedding """
+    #     device = timestamps[0].device
+    #     self.alpha0 = self.alpha0.to(device)
+    #     self.alpha = self.alpha.to(device)
+    #     self.beta = self.beta.to(device)
+    #     self.n_omega0 = self.n_omega0.to(device)
+
+    #     timestamps = timestamps.reshape((-1, 1))
+    #     phase = timestamps * self.n_omega0
+    #     cos = torch.cos(phase)
+    #     sin = torch.sin(phase)
+    #     output = torch.cat([cos, sin], axis=1)
+    #     return output
 
 
 
@@ -170,6 +218,8 @@ class PositionEncoder(TimeEncoder):
         self.time_embedding = torch.tensor(self.get_timing_encoding_matrix(rows, dimension), dtype=torch.float32)
 
     def forward(self, timestamps: Tensor):
+        if self.time_embedding.device != timestamps.device:
+            self.time_embedding = self.time_embedding.to(timestamps.device)
         indexes = self.timestamps_to_indexes(timestamps)
         indexes = indexes.reshape((-1))
         return self.time_embedding[indexes]
@@ -195,97 +245,233 @@ class PositionEncoder(TimeEncoder):
         position_encodings = np.concatenate([np.sin(position_encodings), np.cos(position_encodings)], axis=1)
         return position_encodings
 
+class EncoderAtten(nn.Module):
+    def __init__(self, embed_dim, num_heads, dropout):
+        super(EncoderAtten, self).__init__()
+        self.embed_dim = embed_dim
+        self.num_heads = num_heads
+        self.dropout = dropout
+        self.time_encoders = nn.ModuleList([ HarmonicEncoder(embed_dim) for i in range(num_heads) ])
+        self.attens = nn.ModuleList([nn.MultiheadAttention(embed_dim, num_heads=1, dropout=dropout) for i in range(num_heads)])
+        self.linear = nn.Linear((embed_dim)*num_heads, embed_dim)
+        
 
-class TGN_e2n(nn.Module):
+        self._reset_parameters()
+    
+    def _reset_parameters(self):
+        for i in range(self.num_heads): # actually it is invalid!
+            self.attens[i].q_proj_weight = nn.Parameter(torch.eye(self.embed_dim), requires_grad=False)
+            self.attens[i].k_proj_weight = nn.Parameter(torch.eye(self.embed_dim), requires_grad=False)
+
+
+    # def forward(self, query, key, value, key_padding_mask=None, need_weights=False, attn_mask=None):
+    def forward(self, t, e_nodes_ts, key_padding_mask=None, need_weights=False, attn_mask=None):
+        """ Here the query, key, value should all be timestamps.
+        N: batch size
+        L: target sequence length
+        S: source sequence length
+        E: embedding dimision of one item
+        Args:
+            quary: [L, N, E], i.e., [1, N, 1]
+            key: [S, N, E], i.e., [e_nodes_ts.numel(), N, 1]
+            value: [S, N, E], i.e., [e_nodes_ts.numel(), N, 1]
+            key_padding_mask: [N, S], i.e., [N, e_nodes_ts.numel()]
+        
+        Output:
+            attn_output: [L, N, E], i.e., [1, N, E]
+            attn_output_weights: [N, L, S], i.e., [N, 1, e_nodes_ts.numel()]
+        """
+        atten_outputs = []
+        atten_weights = []
+        for i in range(self.num_heads):
+            # query
+            phi_t = self.time_encoders[i](t).reshape((1, t.numel(), -1))
+            # key
+            phi_ts_mat = self.time_encoders[i](e_nodes_ts).reshape((e_nodes_ts.numel(), 1, -1)).repeat((1, t.numel(), 1)) # [S, N, E]
+            # atten
+            atten_output, atten_weight = self.attens[i](phi_t, phi_ts_mat, phi_ts_mat, key_padding_mask=key_padding_mask)
+            atten_outputs.append(atten_output)
+            atten_weights.append(atten_weight)
+        
+        atten_outputs = torch.cat(atten_outputs, axis=2).squeeze(0)
+        atten_outputs = self.linear(atten_outputs) # [N, E]
+        return atten_outputs, atten_weights
+
+
+class EncoderInnerProduct(nn.Module):
+    def __init__(self, maxt, embed_dim, num_heads, dropout):
+        super(EncoderInnerProduct, self).__init__()
+        self.maxt = maxt
+        self.embed_dim = embed_dim
+        self.num_heads = num_heads
+        self.dropout = dropout
+        # self.time_encoders = nn.ModuleList([ HarmonicEncoder(embed_dim) for i in range(num_heads) ])
+        self.time_encoders = nn.ModuleList([ FourierEncoder(maxt, embed_dim) for i in range(num_heads) ])
+
+        # self.coeffs = nn.Parameter(0.1*torch.ones((1, num_heads)))
+
+        # self.mlps = nn.ModuleList([ nn.Sequential(nn.Linear(1, 512), nn.LeakyReLU(), nn.Linear(512, 1) ) for i in range(num_heads) ])
+
+
+
+    def forward(self, t, e_nodes_ts, key_padding_mask=None, need_weights=False, attn_mask=None):
+        # key_padding_mask: True will be ignored
+        atten_outputs = []
+        atten_weights = []
+        for i in range(self.num_heads):
+            # Fourier encoder
+            t_exp = t.reshape((-1, 1)).repeat( (1, e_nodes_ts.numel())).reshape((1, -1))
+            ts_exp = e_nodes_ts.reshape((1, -1)).repeat((1, t.numel())).reshape((1, -1))
+            interval = t_exp - ts_exp
+            output = self.time_encoders[i](interval)
+            output = output.reshape((t.numel(), e_nodes_ts.numel()))
+            
+
+            # inner product
+            # phi_t = self.time_encoders[i](t).reshape((t.numel(), -1))
+            # phi_ts_mat = self.time_encoders[i](e_nodes_ts).reshape((e_nodes_ts.numel(), -1))
+            # output = phi_t @ phi_ts_mat.T
+
+
+            output = output * (~key_padding_mask).type(output.dtype)
+            output = output.sum(axis=1, keepdim=True)
+            
+            atten_outputs.append(output)
+            atten_weights.append(output)
+        
+        atten_outputs = torch.cat(atten_outputs, axis=1)
+        # atten_outputs = atten_outputs * self.coeffs
+        atten_outputs = atten_outputs.sum(axis=1, keepdim=True)
+
+        return atten_outputs, atten_weights
+    
+    def forward_mlp(self, t, e_nodes_ts, key_padding_mask=None, need_weights=False, attn_mask=None):
+        atten_outputs = []
+        atten_weights = []
+        for i in range(self.num_heads):
+            t_exp = t.reshape((-1, 1)).repeat((1, e_nodes_ts.numel())).reshape((-1, 1))
+            e_nodes_ts_exp = e_nodes_ts.reshape((-1, 1)).repeat((t.numel(), 1))
+            t_interval = t_exp - e_nodes_ts_exp
+            
+            output = self.mlps[i](t_interval)
+            mask = (~key_padding_mask).reshape((-1, 1)).type(output.dtype)
+            output = (output * mask).reshape((t.numel(), e_nodes_ts.numel())).sum(axis=1, keepdim=True)
+
+            atten_outputs.append(output)
+            atten_weights.append(output)
+        
+        atten_outputs = torch.cat(atten_outputs, axis=1)
+        atten_outputs = atten_outputs * self.coeffs
+        atten_outputs = atten_outputs.sum(axis=1, keepdim=True)
+        
+        return atten_outputs, atten_weights
+
+
+    
+
+class GNPP(nn.Module):
     """
-    `GNPP`
+    `GNPP` model
     Devised for edge2node graph data.
     Each data sample should be a star graph, each node represents an edge on original graph. 
     Node timestamps are edge(node pair) timestamps on original graph
     """
-    def __init__(self, G, time_encoder_args, num_heads, dropout):
-        super(TGN_e2n, self).__init__()
+    def __init__(self, G, time_encoder_args, num_heads, dropout, **kwargs):
+        super(GNPP, self).__init__()
         self.G = G
-        self.G_e2n = nx.line_graph(G)
-        self.mapping = dict(zip(self.G_e2n.nodes, np.arange(self.G_e2n.number_of_nodes())))
-        # self.time_encoder = PositionEncoder(time_encoder_args['maxt']*1.5, time_encoder_args['rows'], time_encoder_args['dimension'])
-        # self.time_encoder = FourierEncoder(time_encoder_args['maxt']*1.5, time_encoder_args['dimension']//2)
-        self.time_encoder = HarmonicEncoder(time_encoder_args['dimension'])
+        self.time_encoder_args = time_encoder_args
+        self.kwargs = kwargs
+
+        if time_encoder_args['type'] == 'pe':
+            self.time_encoder = PositionEncoder(time_encoder_args['maxt']*1.5, time_encoder_args['rows'], time_encoder_args['dimension']) # output vector
+        elif time_encoder_args['type'] == 'he':
+            self.time_encoder = HarmonicEncoder(time_encoder_args['dimension'])
+        elif time_encoder_args['type'] == 'fe':
+            self.time_encoder = FourierEncoder(time_encoder_args['maxt']*1.5, time_encoder_args['dimension']//2) # output scalar
         
-        
+    
         self.Atten_self = nn.MultiheadAttention(embed_dim=time_encoder_args['dimension'], num_heads=num_heads, dropout=dropout)
         self.Atten_neig = nn.MultiheadAttention(embed_dim=time_encoder_args['dimension'], num_heads=num_heads, dropout=dropout)
         
+        # self.Atten_self = EncoderAtten(embed_dim=time_encoder_args['dimension'], num_heads=num_heads, dropout=dropout)
+        # self.Atten_neig = EncoderAtten(embed_dim=time_encoder_args['dimension'], num_heads=num_heads, dropout=dropout)
+
+        # self.Atten_self = EncoderInnerProduct(maxt=50, embed_dim=time_encoder_args['dimension'], num_heads=num_heads, dropout=dropout)
+        # self.Atten_neig = EncoderInnerProduct(maxt=50, embed_dim=time_encoder_args['dimension'], num_heads=num_heads, dropout=dropout)
         
-        self.Linear_lambda = nn.Linear(time_encoder_args['dimension']*2, 1)
-        self.Linear_pred = nn.Linear(time_encoder_args['dimension']*2, 1)
-        # self.Linear_pred = nn.Sequential(nn.Linear(time_encoder_args['dimension']*2, 128), nn.LeakyReLU(), nn.Linear(128, 1))
+        self.Linear_lambda = nn.Linear(time_encoder_args['dimension']*2, 1, bias=False)
+
+        if isinstance(self.Atten_self, EncoderInnerProduct):
+            self.Linear_pred = nn.Linear(1, 1)
+        else:
+            self.Linear_pred = nn.Linear(time_encoder_args['dimension']*2, 1)
 
         self.W_H = torch.nn.Parameter(torch.zeros(time_encoder_args['dimension'], 1))
-        self.phi = torch.nn.Parameter(torch.tensor([1.0]))
-
-
-        # self.miu = torch.nn.Parameter(torch.zeros((1, 1)))
-        # self.linear_weights = torch.nn.Parameter(torch.zeros((1, time_encoder_args['dimension'])))
+        # self.phi = torch.nn.Parameter(torch.tensor([0.1]))
+        # self.phi = 10 # 10 synthetic_neg
+        self.phi = 0.1 # synthetic_pos
 
         self.initialize()
     
     def initialize(self,):
-        # torch.nn.init.uniform_(self.miu)
-        # torch.nn.init.normal_(self.linear_weights)
         glorot(self.W_H)
 
-# TODO: multi-head ?
     def forward(self, batch, t):
         e_nodes_exp = batch.e_nodes_exp
         e_nodes_ts = batch.e_nodes_ts
-        e_node_target = batch.e_node_target # because of the SPECIFIC star graph, this e_node_target is not so important
+        e_node_target = batch.e_node_target 
 
 
-        # phi_t = self.time_encoder(t).reshape((1, 1, -1))
-        # observe_mask = e_nodes_ts < t
-        # observed_ts = e_nodes_ts[observe_mask]
-        # phi_ts = self.time_encoder(observed_ts).reshape((observe_mask.sum().cpu().item(), 1, -1))
-        # phi_tall = torch.cat([phi_ts, phi_t], axis=0)
-        # atten_output, atten_weight = self.Atten_neig(phi_t, phi_tall, phi_tall)
-        # out = self.Linear(atten_output)
-        # out = soft_plus(1, out)
-        # return out
-
-
-        # self_atten concat neighbor_atten.      Assume: for query, (L=1, N=t.numel(), E). for key, (S=len(e_nodes_ts), N=t.numel, E)
-        phi_t = self.time_encoder(t).reshape((1, 1, -1))
-        phi_t = phi_t.reshape((1, t.numel(), -1))
-        
         # make sure neig_mask, and self_mask is not empty
         e_nodes_ts = torch.cat([torch.tensor([0, 0], dtype=e_nodes_ts.dtype, device=e_nodes_ts.device), e_nodes_ts], axis=0 ) 
         e_nodes_exp = torch.cat([torch.tensor([-1], dtype=e_nodes_exp.dtype, device=e_nodes_exp.device), e_node_target, e_nodes_exp], axis=0 )
 
+        
+        # build mask
         ts_mat = e_nodes_ts.reshape((1, -1)).repeat((t.numel(), 1))
         key_padding_mask = ts_mat > t.reshape((-1, 1)) # True will be ignored
 
         self_mask = (e_nodes_exp != e_node_target).reshape(1, -1).repeat((t.numel(), 1))
         neig_mask = (e_nodes_exp == e_node_target).reshape(1, -1).repeat((t.numel(), 1))
-        key_padding_mask_self = key_padding_mask + self_mask # # True positions will be ignored
+        key_padding_mask_self = key_padding_mask + self_mask
         key_padding_mask_neig = key_padding_mask + neig_mask
 
-        phi_ts_mat = self.time_encoder(e_nodes_ts).reshape((e_nodes_ts.numel(), 1, -1)).repeat((1, t.numel(), 1)) # [S, N, E]
-        self_atten_output, self_weights = self.Atten_self(phi_t, phi_ts_mat, phi_ts_mat, key_padding_mask=key_padding_mask_self)
-        neig_atten_output, neig_weights = self.Atten_neig(phi_t, phi_ts_mat, phi_ts_mat, key_padding_mask=key_padding_mask_neig)
+        # MultiHeadAtten setting
+        if isinstance(self.Atten_self, nn.MultiheadAttention):
+            phi_t = self.time_encoder(t).reshape((1, t.numel(), -1)) # query [L, N, E], i.e., [1, t.numel(), encoding_dim)
+            phi_ts_mat = self.time_encoder(e_nodes_ts).reshape((e_nodes_ts.numel(), 1, -1)).repeat((1, t.numel(), 1)) # key/value [S, N, E], i.e., [e_nodes_ts.numel(), t.numel(), encoding_dim]
+            self_atten_output, self_weights = self.Atten_self(phi_t, phi_ts_mat, phi_ts_mat, key_padding_mask=key_padding_mask_self)
+            
+            if self.kwargs['with_neig']:
+                neig_atten_output, neig_weights = self.Atten_neig(phi_t, phi_ts_mat, phi_ts_mat, key_padding_mask=key_padding_mask_neig)
+            else:
+                neig_atten_output = torch.zeros_like(self_atten_output)
+            
+            atten_output = torch.cat([self_atten_output, neig_atten_output], axis=2).squeeze(0)
+            lambdav = self.Linear_lambda(atten_output)
 
-        atten_output = torch.cat([self_atten_output, neig_atten_output], axis=2).squeeze(0)
-        # atten_output = self_atten_output.squeeze(0)
+        elif isinstance(self.Atten_self, EncoderAtten): # EncoderAtten setting
+            self_atten_output, self_weights = self.Atten_self(t, e_nodes_ts, key_padding_mask_self)
+            neig_atten_output, neig_weights = self.Atten_neig(t, e_nodes_ts, key_padding_mask_neig)
+            atten_output = torch.cat([self_atten_output, neig_atten_output], axis=1)
+            lambdav = self.Linear_lambda(atten_output)
 
-        lambdav = self.Linear_lambda(atten_output)
-        lambdav = soft_plus(self.phi, lambdav)
+        elif isinstance(self.Atten_self, EncoderInnerProduct): # EncoderInnerProduct setting
+            self_atten_output, self_weights = self.Atten_self(t, e_nodes_ts, key_padding_mask_self)
+            neig_atten_output, neig_weights = self.Atten_neig(t, e_nodes_ts, key_padding_mask_neig)
+            atten_output = self_atten_output + neig_atten_output
+            lambdav = atten_output
+        
+
+
 
         # import ipdb; ipdb.set_trace()
-
+        lambdav = soft_plus(self.phi, lambdav)
         if torch.isnan(lambdav).any() or torch.isinf(lambdav).any():
             import ipdb; ipdb.set_trace()
+        return lambdav, atten_output        
 
-
-        return lambdav, atten_output
+        
 
 
         
@@ -353,7 +539,6 @@ def soft_plus(phi, x):
     x = x * phi
     x[x>20] = 20
     res = 1.0/phi * torch.log( 1 + torch.exp(x) )
-
     # res = torch.where(x/phi < 20, 1e-6 + phi * torch.log1p( torch.exp(x/phi) ), x ) # 1e-6 is important, to make sure lambda > 0
     return res
 
@@ -493,8 +678,14 @@ class TGNLayer(MessagePassing):
 def get_model(G, embedding_matrix, args, logger):
     if args.model == 'TGN':
         model = TGN(G, embedding_matrix, args.time_encoder_args, args.layers, args.in_channels, args.hidden_channels, args.out_channels, args.dropout)
-    elif args.model == 'TGN_e2n':
-        model = TGN_e2n(G, args.time_encoder_args, args.num_heads, args.dropout)
+    elif args.model == 'GNPP':
+        model = GNPP(G, args.time_encoder_args, args.num_heads, args.dropout, with_neig=args.with_neig)
+    elif args.model in ['GAT', 'GraphSAGE']:
+        from xww.utils.models import GNNModel
+        model = GNNModel(args.model, args.layers, args.in_channels, args.hidden_channels, out_features=1, set_indice_size=1, dropout=args.dropout)
     else:
         raise NotImplementedError("Not implemented now")
     return model
+
+
+
