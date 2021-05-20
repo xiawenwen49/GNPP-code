@@ -252,16 +252,19 @@ class EncoderAtten(nn.Module):
         self.num_heads = num_heads
         self.dropout = dropout
         self.time_encoders = nn.ModuleList([ HarmonicEncoder(embed_dim) for i in range(num_heads) ])
-        self.attens = nn.ModuleList([nn.MultiheadAttention(embed_dim, num_heads=1, dropout=dropout) for i in range(num_heads)])
-        self.linear = nn.Linear((embed_dim)*num_heads, embed_dim)
+        # self.attens = nn.ModuleList([nn.MultiheadAttention(embed_dim, num_heads=1, dropout=dropout) for i in range(num_heads)])
+        self.sm = nn.Softmax(dim=1)
+        # self.linear = nn.Linear((embed_dim)*num_heads, embed_dim)
+        self.V = nn.Parameter(torch.rand(embed_dim, embed_dim))
+
         
 
-        self._reset_parameters()
+        # self._reset_parameters()
     
-    def _reset_parameters(self):
-        for i in range(self.num_heads): # actually it is invalid!
-            self.attens[i].q_proj_weight = nn.Parameter(torch.eye(self.embed_dim), requires_grad=False)
-            self.attens[i].k_proj_weight = nn.Parameter(torch.eye(self.embed_dim), requires_grad=False)
+    # def _reset_parameters(self):
+    #     for i in range(self.num_heads): # actually it is invalid!
+    #         self.attens[i].q_proj_weight = nn.Parameter(torch.eye(self.embed_dim), requires_grad=False)
+    #         self.attens[i].k_proj_weight = nn.Parameter(torch.eye(self.embed_dim), requires_grad=False)
 
 
     # def forward(self, query, key, value, key_padding_mask=None, need_weights=False, attn_mask=None):
@@ -272,29 +275,39 @@ class EncoderAtten(nn.Module):
         S: source sequence length
         E: embedding dimision of one item
         Args:
-            quary: [L, N, E], i.e., [1, N, 1]
-            key: [S, N, E], i.e., [e_nodes_ts.numel(), N, 1]
-            value: [S, N, E], i.e., [e_nodes_ts.numel(), N, 1]
-            key_padding_mask: [N, S], i.e., [N, e_nodes_ts.numel()]
+            t: [N,],
+            e_nodes_ts: [L,], all timestamps (self & neighbor)
+            key_padding_mask: [N, L]. self_mask or neighbor_mask
         
         Output:
-            attn_output: [L, N, E], i.e., [1, N, E]
-            attn_output_weights: [N, L, S], i.e., [N, 1, e_nodes_ts.numel()]
+            attn_output: [N, E].
+            attn_output_weights: [N, L].
         """
         atten_outputs = []
         atten_weights = []
+        N = t.numel()
+        L = e_nodes_ts.numel()
+        E = self.embed_dim
         for i in range(self.num_heads):
-            # query
-            phi_t = self.time_encoders[i](t).reshape((1, t.numel(), -1))
-            # key
-            phi_ts_mat = self.time_encoders[i](e_nodes_ts).reshape((e_nodes_ts.numel(), 1, -1)).repeat((1, t.numel(), 1)) # [S, N, E]
-            # atten
-            atten_output, atten_weight = self.attens[i](phi_t, phi_ts_mat, phi_ts_mat, key_padding_mask=key_padding_mask)
-            atten_outputs.append(atten_output)
+            phi_t = self.time_encoders[i](t).reshape((N, -1))
+            phi_ts = self.time_encoders[i](e_nodes_ts).reshape((L, -1))
+
+            inner_prod = phi_t @ phi_ts.T
+
+            # import ipdb; ipdb.set_trace()
+            inner_prod[key_padding_mask] = float('-inf') # TODO: for check            
+
+            atten_weight = self.sm(inner_prod)
+
+            phi_ts_mat = phi_ts.reshape((1, L, -1)).repeat((N, 1, 1)) # (N, L, E) prepare candidate time embeddings
+            phi_ts_mat = phi_ts_mat @ self.V # value embedding space
+            t_rep = phi_ts_mat * atten_weight.reshape((N, L, 1)).repeat(1, 1, E) # (N, L, E), weight embeddings
+            t_rep = t_rep.sum(axis=1) # (N, E), sum up embeddings
+
+            atten_outputs.append(t_rep)
             atten_weights.append(atten_weight)
         
-        atten_outputs = torch.cat(atten_outputs, axis=2).squeeze(0)
-        atten_outputs = self.linear(atten_outputs) # [N, E]
+        atten_outputs = torch.cat(atten_outputs, axis=1)
         return atten_outputs, atten_weights
 
 
@@ -305,11 +318,8 @@ class EncoderInnerProduct(nn.Module):
         self.embed_dim = embed_dim
         self.num_heads = num_heads
         self.dropout = dropout
-        # self.time_encoders = nn.ModuleList([ HarmonicEncoder(embed_dim) for i in range(num_heads) ])
         self.time_encoders = nn.ModuleList([ FourierEncoder(maxt, embed_dim) for i in range(num_heads) ])
-
         # self.coeffs = nn.Parameter(0.1*torch.ones((1, num_heads)))
-
         # self.mlps = nn.ModuleList([ nn.Sequential(nn.Linear(1, 512), nn.LeakyReLU(), nn.Linear(512, 1) ) for i in range(num_heads) ])
 
 
@@ -383,11 +393,11 @@ class GNPP(nn.Module):
         self.kwargs = kwargs
 
         if time_encoder_args['type'] == 'pe':
-            self.time_encoder = PositionEncoder(time_encoder_args['maxt']*1.5, time_encoder_args['rows'], time_encoder_args['dimension']) # output vector
+            self.time_encoder = PositionEncoder(time_encoder_args['maxt']*1.1, time_encoder_args['rows'], time_encoder_args['dimension']) # output vector
         elif time_encoder_args['type'] == 'he':
             self.time_encoder = HarmonicEncoder(time_encoder_args['dimension'])
-        elif time_encoder_args['type'] == 'fe':
-            self.time_encoder = FourierEncoder(time_encoder_args['maxt']*1.5, time_encoder_args['dimension']//2) # output scalar
+        # elif time_encoder_args['type'] == 'fe':
+        #     self.time_encoder = FourierEncoder(time_encoder_args['maxt']*1.5, time_encoder_args['dimension']//2) # output scalar
         
     
         self.Atten_self = nn.MultiheadAttention(embed_dim=time_encoder_args['dimension'], num_heads=num_heads, dropout=dropout)
@@ -470,67 +480,6 @@ class GNPP(nn.Module):
         if torch.isnan(lambdav).any() or torch.isinf(lambdav).any():
             import ipdb; ipdb.set_trace()
         return lambdav, atten_output        
-
-        
-
-
-        
-        # observe_mask = e_nodes_ts < t
-        # observed_ts = e_nodes_ts[observe_mask]
-        # observed_nodes = e_nodes_exp[observe_mask]
-        # dt = t - observed_ts
-        # phi_dt = self.time_encoder(dt) # time encoding of delta t
-        # linear_weights = self.linear_weights(observed_nodes)
-        # out = phi_dt * linear_weights
-        # out = out.sum(axis=1) 
-        # out = out.sum(dim=0, keepdim=True) + self.miu(e_node_target)
-        # out = soft_plus(100, out)
-        # return out
-
-        # observe_mask = e_nodes_ts < t
-        # observed_ts = e_nodes_ts[observe_mask]
-        # observed_nodes = e_nodes_exp[observe_mask]
-        # dt = t - observed_ts
-        # # import ipdb; ipdb.set_trace()
-        # beta = self.beta(observed_nodes).reshape(dt.shape)
-        # miu = self.miu(observed_nodes).reshape(dt.shape)
-        # out = beta * torch.exp( -1 * torch.nn.functional.relu(beta) * dt ) + miu
-        # if torch.isnan(out).any() or torch.isinf(out).any():
-        #     import ipdb; ipdb.set_trace()
-        # out = out.sum(dim=0, keepdim=True)
-        # return out
-
-        # observe_mask = e_nodes_ts < t
-        # observed_ts = e_nodes_ts[observe_mask]
-        # observed_nodes = e_nodes_exp[observe_mask]
-        # dt = t - observed_ts
-        # out = 5*torch.exp(-5*dt)*0.1
-        # out = out.sum(dim=0, keepdim=True) + 0.1
-        # return out
-
-        # observe_mask = e_nodes_ts < t
-        # observed_ts = e_nodes_ts[observe_mask]
-        # observed_nodes = e_nodes_exp[observe_mask]
-        # dt = t - observed_ts
-        # phi_dt = self.time_encoder(dt) # time encoding of delta t
-        # linear_weights = self.linear_weights
-        # out = phi_dt * linear_weights
-        # out = out.sum(axis=1) 
-        # out = out.sum(dim=0, keepdim=True) + self.miu
-        # out = soft_plus(100, out)
-        # return out
-
-
-        # only fourier encoder and recent neighbors
-        # observe_mask = e_nodes_ts < t
-        # observed_ts = e_nodes_ts[observe_mask]
-        # observed_nodes = e_nodes_exp[observe_mask]
-        # dt = t - observed_ts
-        # dt, _ = torch.sort(dt)
-        # dt = dt[:10]
-        # phi_dt = self.time_encoder(dt) # time encoding of delta t
-        # out = phi_dt.sum(axis=0, keepdim=True)
-        # return out
 
 
 

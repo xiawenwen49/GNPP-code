@@ -7,8 +7,8 @@ else
     batch_size=16
 fi
 
-epochs=200
-gpu=1
+epochs=500
+gpu=2
 num_heads=1
 optim=adam
 time_encoder_type=he

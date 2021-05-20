@@ -203,38 +203,57 @@ def relu_plus(phi, x):
     return phi + torch.nn.functional.relu(x)
 
 
-def compute_integral(model, batch, t_start, t_ends, N=200):
-    t_ends = t_ends.reshape(-1)
-    assert t_ends.min() >= t_start
-    device = t_start.device
-    points = [torch.rand(N+2, device=device)[1:-1]*(t_ends[i]-t_start)+t_start if i==0 \
-                else torch.rand(N+2, device=device)[1:-1]*(t_ends[i]-t_ends[i-1])+t_ends[i] for i in range(len(t_ends)) ]
+# def compute_integral(model, batch, t_start, t_ends, N=200):
+#     t_ends = t_ends.reshape(-1)
+#     assert t_ends.min() >= t_start
+#     device = t_start.device
+#     # points = torch.rand(N+2, device=device)[1:-1]*(t_end-t_start)+t_start
+#     points = [torch.rand(N+2, device=device)[1:-1]*(t_ends[i]-t_start)+t_start if i==0 \
+#                 else torch.rand(N+2, device=device)[1:-1]*(t_ends[i]-t_ends[i-1])+t_ends[i] for i in range(len(t_ends)) ]
     
-    # points = [torch.linspace(t_start, t_ends[i], N+2, device=device)[1:-1] if i==0 \
-    #             else torch.linspace(t_ends[i-1], t_ends[i], N+2, device=device)[1:-1] for i in range(len(t_ends)) ]
+#     # points = [torch.linspace(t_start, t_ends[i], N+2, device=device)[1:-1] if i==0 \
+#     #             else torch.linspace(t_ends[i-1], t_ends[i], N+2, device=device)[1:-1] for i in range(len(t_ends)) ]
     
-    # points = [ torch.tensor(np.random.rand(N)*(t_ends[i].item()-t_start.item())+t_start.item(), dtype=torch.float32,  device=device) if i==0 \
-    #             else torch.tensor(np.random.rand(N)*(t_ends[i].item()-t_ends[i-1].item())+t_ends[i].item(), dtype=torch.float32, device=device) \
-    #             for i in range(len(t_ends))]
+#     # points = [ torch.tensor(np.random.rand(N)*(t_ends[i].item()-t_start.item())+t_start.item(), dtype=torch.float32,  device=device) if i==0 \
+#     #             else torch.tensor(np.random.rand(N)*(t_ends[i].item()-t_ends[i-1].item())+t_ends[i].item(), dtype=torch.float32, device=device) \
+#     #             for i in range(len(t_ends))]
     
 
-    points = torch.cat(points).to(device)
+#     points = torch.cat(points).to(device)
+
+#     # import ipdb; ipdb.set_trace()
+#     values, atten_output = model(batch, points)
+#     values = values.reshape((-1, 1))
+
+#     intervals = torch.cat([t_start.reshape(-1), t_ends])
+#     intervals = (intervals[1:] - intervals[:-1])/N
+#     intervals = intervals.reshape(-1, 1).repeat(1, N).reshape(-1, 1)
+#     assert intervals.shape == values.shape, "intervals.shape should == values.shape"
+
+#     values = values * intervals
+#     values = values.cumsum(dim=0)
+#     index = torch.arange(1, t_ends.numel()+1, device=device) * N - 1
+#     return_values = values[index]
+#     # import ipdb; ipdb.set_trace()
+#     return_values = return_values.sum()
+#     return return_values
+
+def compute_integral(model, batch, t_start, t_end, N=200):
+    assert t_end >= t_start
+    device = t_start.device
+    points = torch.rand(N+2, device=device)[1:-1]*(t_end-t_start)+t_start
+    points = points.to(device)
 
     # import ipdb; ipdb.set_trace()
     values, atten_output = model(batch, points)
     values = values.reshape((-1, 1))
 
-    intervals = torch.cat([t_start.reshape(-1), t_ends])
-    intervals = (intervals[1:] - intervals[:-1])/N
+    intervals = (t_end - t_start)/N
     intervals = intervals.reshape(-1, 1).repeat(1, N).reshape(-1, 1)
     assert intervals.shape == values.shape, "intervals.shape should == values.shape"
 
     values = values * intervals
-    values = values.cumsum(dim=0)
-    index = torch.arange(1, t_ends.numel()+1, device=device) * N - 1
-    return_values = values[index]
-    # import ipdb; ipdb.set_trace()
-    return_values = return_values.sum()
+    return_values = values.sum()
     return return_values
 
 
@@ -255,13 +274,13 @@ def criterion(model, batch, **kwargs):
 
     # neg likelihood
     ll0 = torch.log( 1e-9 + lambdav ).sum()
-    integral = compute_integral(model, batch, T_all[0], T_all[-1], N=200)
+    integral = compute_integral(model, batch, T_all[0], T_all[-1], N=100)
     nll = -1 * (ll0 - integral)
 
     # time pred mse
     time_error = torch.mean(torch.square(pred[:-1] - intervals))
 
-    loss = nll + 0.1 * time_error
+    loss = nll + 0.001 * time_error
     # loss = nll 
 
     return loss, -nll, time_error
