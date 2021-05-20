@@ -1,22 +1,15 @@
 import argparse
-import numpy as np
 import sys
-import torch
 import os
 import time
-import json
 import warnings
 from pathlib import Path
 from . import log
 from . import utils
-from .train import train_model, evaluate_state_dict
 from .model import get_model
-
+from .train import train_model
 
 warnings.filterwarnings("ignore", message=r"Passing", category=FutureWarning)
-# torch.autograd.set_detect_anomaly(True)
-
-
 ROOT_DIR = Path(os.path.dirname(os.path.abspath(__file__)) ).parent.parent
 
 def str2bool(v):
@@ -110,12 +103,8 @@ def main():
     args.time_encoder_args = {'maxt': args.time_encoder_maxt, 'rows': args.time_encoder_rows, 'dimension': args.time_encoder_dimension, 'type': args.time_encoder_type}
     model = get_model(G, embedding_matrix, args, logger)
 
-    if args.eval != '':
-        assert len(args.eval) == 19, 'Must be a time_str with format YEAR_MO_DA_HO_MI_SE' # e.g., 2021_02_26_15_14_38
-        assert args.state_dict is not None, "Must indict state_dict filename"
-        evaluate_state_dict(model, dataloaders, args, logger, time_str=args.eval, parallel=args.parallel_eval)
-    else:
-        train_model(model, dataloaders, args, logger)
+    # train model
+    train_model(model, dataloaders, args, logger)
 
 if __name__ == "__main__":
     main()
