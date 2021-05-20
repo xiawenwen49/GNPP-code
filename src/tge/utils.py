@@ -1,4 +1,3 @@
-# from time import time
 
 import numpy as np
 import networkx as nx
@@ -8,14 +7,12 @@ import os.path as osp
 from torch.random import seed
 from tqdm import tqdm
 from pathlib import Path
-# from torch.utils.data import DataLoader
 from torch.utils.data import Dataset
 from torch_geometric.data import DataLoader
 from torch_geometric.data import Data, InMemoryDataset, NeighborSampler
 from torch_geometric.utils import k_hop_subgraph
 from tick.base import TimeFunction
 from tick.hawkes import SimuInhomogeneousPoisson, SimuHawkes, SimuHawkesExpKernels, HawkesKernelTimeFunc, HawkesKernel0, HawkesKernelExp
-# from tick.plot import plot_point_process
 
 
 class EventDataset(Dataset):
@@ -37,7 +34,6 @@ class EventDataset(Dataset):
             return torch.LongTensor([u, v]), torch.FloatTensor(self.G[u][v]['timestamp'][:-1] ) # return all timestamps except the last one, as train
         else:
             u, v = self.all_edges[index]
-            # return torch.LongTensor([u, v]), torch.FloatTensor([self.G[u][v]['timestamp'][-1] ] ) # only return the last one, as label
             return torch.LongTensor([u, v]), torch.FloatTensor(self.G[u][v]['timestamp']) # return all,  the last one as label
 
 
@@ -69,11 +65,9 @@ class GNPPDataset(InMemoryDataset):
             if len(self.G[u][v]['timestamp']) >= self.length_thres:
                 nodepairs.append([u, v])
         
-        if 'Reddit' in str(self.root):
-            nodepairs = nodepairs[:500] # Reddit has a dense subgraph
+        # if 'Reddit' in str(self.root):
+        #     nodepairs = nodepairs[:500] # Reddit has a dense subgraph
     
-        # nodepairs = nodepairs[:20] # for debug
-
         data_list = self.extract_edge_subgraphs(nodepairs, rescale=self.rescale) # extract subgraph
         
         train_idx = int(len(data_list)*0.75)
@@ -191,12 +185,8 @@ class GNNDatatset(GNPPDataset):
             c_index = torch.LongTensor([[e_node_index,]])
             T = torch.FloatTensor(self.G[edge[0]][edge[1]]['timestamp']) / rescale
             data = Data(x=x, edge_index=edge_list, y=y, set_indice=c_index, T=T)
-            
             # import ipdb; ipdb.set_trace()
-
             data_list.append(data)
-
-            
         return data_list
 
 
@@ -293,8 +283,6 @@ def compute_max_interval(edgearray):
 
 def read_file(graph_file, directed=False, rescale=False, return_edgearray=False, relable_nodes=True, logger=None, **kwargs):
     edgearray = np.loadtxt(graph_file)
-
-    # edgearray = edgearray[ :int(edgearray.shape[0]*0.7), :]
 
     edgearray = edgearray[ edgearray[:, -1].argsort() ] # IMPORTANT: sort timestampes
     edgearray[:, -1] = edgearray[:, -1] - min(edgearray[:, -1]) # set earliest timestamp as 0
@@ -404,11 +392,7 @@ def get_dataloader(train_set, val_set, test_set, args):
 
 class SyntheticGenerator(object):
     """
-    TODO: modify -> for temporal graph
-
-
-    Generate a synthetic dataset:
-    10 nodes, 20 edges, hawkes process.
+    Generate a synthetic dataset
     """
     def __init__(self, root, N=100, deg=2, p=0.3, seed=123):
         """

@@ -363,8 +363,7 @@ def evaluate_batch(model, batch, **kwargs):
     ll = ll.cpu().item()
 
     rmse = time_error.sqrt().cpu().item() # rmse
-    abs_ratio = rmse / (mean_interval + 1e-6)
-    return {'loss': loss, 'rmse': rmse, 'll': ll, 'abs_ratio': abs_ratio}
+    return {'loss': loss, 'rmse': rmse, 'll': ll}
 
 
 
@@ -414,33 +413,12 @@ def train_model(model, dataloaders, args, logger):
 
         logger.info(f" [ Epoch {i} ] ")
         logger.info(f"   - (training)    loss: {train_results['loss']:.5f}    rmse: {train_results['rmse']:.5f}    ll: {train_results['ll']:.5f}")
-        logger.info(f"   - (testing.)    loss: {eval_results['loss']:.5f}    rmse: {eval_results['rmse']:.5f}    ll: {eval_results['ll']:.5f}    abs_ratio: {eval_results['abs_ratio']:.5f}")
+        logger.info(f"   - (testing.)    loss: {eval_results['loss']:.5f}    rmse: {eval_results['rmse']:.5f}    ll: {eval_results['ll']:.5f}")
     # logger.info(f"   - (best res)    loss: {eval_results['loss']:.6f}    rmse: {eval_results['rmse']:.5f}    abs_ratio: {eval_results['abs_ratio']:.5f}")
         
         
     logger.info(f"Training finished, best test loss: , best test rmse: , btest abs_ratio: ")
 
-
-
-def evaluate_state_dict(model, dataloaders, args, logger, **kwargs):
-    """ evaluate using an existing time_str checkpoint """
-    time_str = args.eval
-    state_dict_filename = args.state_dict
-    device = get_device(args.gpu)
-    recorder = Recorder(minmax={}, checkpoint_dir=args.checkpoint_dir, dataset=args.dataset, time_str=time_str)
-    state_dict_dir = args.checkpoint_dir/args.dataset/time_str/f'{args.state_dict}.state_dict'
-    state_dict = recorder.load_model(state_dict_dir)
-    assert state_dict is not None, f"No {state_dict_filename}.state_dict in {args.dataset}/{time_str}/ dir"
-    model.load_state_dict(state_dict)
-    model = model.to(device)
-    # lambdaf = AttenIntensityE2N(model) # AttenIntensity
-    train_loader, val_loader, test_loader = dataloaders
-    results = evaluate_epoch(model, test_loader, args, logger, recorder=recorder)
-    recorder.save_record()
-    
-    logger.info(f" [ Eval using {time_str} ] ")
-    logger.info(f"   loss: {results['loss']:.4f},   rmse: {results['rmse']:.4f},    abs_ratio: {results['abs_ratio']:.4f}")
-    return lambdaf, model
 
 
 
