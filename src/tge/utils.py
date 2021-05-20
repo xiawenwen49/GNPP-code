@@ -4,37 +4,12 @@ import networkx as nx
 import torch
 import os
 import os.path as osp
-from torch.random import seed
 from tqdm import tqdm
 from pathlib import Path
-from torch.utils.data import Dataset
 from torch_geometric.data import DataLoader
 from torch_geometric.data import Data, InMemoryDataset, NeighborSampler
-from torch_geometric.utils import k_hop_subgraph
 from tick.base import TimeFunction
 from tick.hawkes import SimuInhomogeneousPoisson, SimuHawkes, SimuHawkesExpKernels, HawkesKernelTimeFunc, HawkesKernel0, HawkesKernelExp
-
-
-class EventDataset(Dataset):
-    def __init__(self, G, name):
-        self.G = G
-        self.name = name
-        self.all_edges = []
-        for edge in G.edges():
-            if len(G[edge[0]][edge[1]]['timestamp']) >= 5: # >= 5
-                self.all_edges.append(edge)
-        self.all_edges = self.all_edges[:40] # for debug
-    
-    def __len__(self):
-        return len(self.all_edges)
-
-    def __getitem__(self, index):
-        if self.name == 'train':
-            u, v = self.all_edges[index]
-            return torch.LongTensor([u, v]), torch.FloatTensor(self.G[u][v]['timestamp'][:-1] ) # return all timestamps except the last one, as train
-        else:
-            u, v = self.all_edges[index]
-            return torch.LongTensor([u, v]), torch.FloatTensor(self.G[u][v]['timestamp']) # return all,  the last one as label
 
 
 
@@ -192,95 +167,6 @@ class GNNDatatset(GNPPDataset):
 
 
 
-class TGNDataset(InMemoryDataset):
-    def __init__(self, G, root, name=None):
-        """
-        Args:
-            G: nx obj, with all timestamps
-            root: str, root dir of a specific dataset, e.g., ./data/dataset1/
-            # dataset: str, the dataset name, e.g., dataset1
-            name: 'train', 'val', 'test'
-        """
-        self.G = G
-        self.root=root
-        # self.dataset = dataset
-        self.name=name
-        self.edge_index = torch.LongTensor( np.concatenate([ np.array(self.G.edges(), dtype=np.int), np.array(self.G.edges(), dtype=np.int)[:, [1,0]] ], axis=0 ).T )
-        self.length_thres = 5
-        super(TGNDataset, self).__init__(root=root) # will check if root/processed/processed_file_names exist. if not, run self.process()
-        # index = ["train", "test"].index(name)
-        self.data, self.slices = torch.load(self.processed_paths[0])
-    
-    @property
-    def processed_file_names(self):
-        return ["{}.pt".format(self.name)]
-
-    def process(self):
-        """ Here nodepairs only contains those with len(timestamps)>length_thres """
-        nodepairs = []
-        for u, v in self.G.edges():
-            if len(self.G[u][v]['timestamp']) >= self.length_thres:
-                nodepairs.append([u, v])
-        
-        data_list = self.extract_enclosing_subgraphs(nodepairs, self.edge_index) # extract subgraph
-        data_list_storage = self.collate(data_list)
-        # index = ["train", "test"].index(self.name)
-        file_name = self.processed_paths[0] # e.g., ./data/dataset1/`processed`/train.pt
-        torch.save(data_list_storage, file_name)
-
-
-    def extract_enclosing_subgraphs(self, nodepairs, edge_index):
-        """
-        Extract subgraphs for each node pair in nodepairs.
-        Here the extracted subgraph is based on all edge_index, regardless of timestamps.
-        Masking timestamps<=t with a specific `t` is done in model.forward().
-        """
-        data_list = []
-        for u, v in tqdm(nodepairs, total=len(nodepairs)):
-            sub_nodes, sub_edge_index, mapping, edge_mask = k_hop_subgraph([u, v], 1, edge_index, relabel_nodes=True)
-            # confirmed: if relabel_nodes=True, new label of sub_nodes[i] is i, for new edge_index. 
-            if self.name == 'train':
-                T = torch.tensor(self.G[u][v]['timestamp'][:-1])
-            else:
-                T = torch.tensor(self.G[u][v]['timestamp'])
-            
-            edgearray = []
-            new_old_map = dict(zip(range(len(sub_nodes)), sub_nodes.cpu().numpy()))
-            for i, (u, v) in enumerate(zip(sub_edge_index[0].cpu().numpy(), sub_edge_index[1].cpu().numpy())):
-                if self.name == 'train':
-                    timestamp = torch.tensor( self.G[ new_old_map[u] ][ new_old_map[v] ]['timestamp'][:-1] ).reshape(1, -1)
-                else:
-                    timestamp = torch.tensor( self.G[ new_old_map[u] ][ new_old_map[v] ]['timestamp'] ).reshape(1, -1)
-                e_ext = sub_edge_index[:, i].reshape(-1, 1).repeat(1, timestamp.numel())
-                e_ext = torch.cat([e_ext, timestamp], axis=0)
-                edgearray.append(e_ext)
-            edgearray = torch.cat(edgearray, axis=1).T # save all expanded edge-t into a Data() sample, to accelerate edge-t selection in model forward.
-
-            data = Data(x=sub_nodes, edge_index=sub_edge_index, nodepair=torch.LongTensor([u, v]), mapping=mapping, T=T, edgearray=edgearray)
-            data_list.append(data)
-        return data_list
-
-def compute_max_interval(edgearray):
-    edges = edgearray[:, :2].astype(np.int)
-    timestamps = edgearray[:, -1]
-    G = nx.Graph(edges.tolist())
-    for i, (u, v) in enumerate(edges):
-        if G[u][v].get('timestamp', None) is None:
-            G[u][v]['timestamp'] = [timestamps[i]]
-        else: 
-            G[u][v]['timestamp'].append(timestamps[i])
-    max_intervals = []
-    for i, (u, v) in enumerate(edges):
-        intervals = np.array( G[u][v]['timestamp'] )
-        if len(intervals) >= 5:
-            intervals = np.sort(intervals)
-            intervals = intervals[1:] - intervals[:-1]
-            max_intervals.append(intervals.max())
-    max_interval = np.max(max_intervals)
-    # import ipdb; ipdb.set_trace()
-    return max_interval
-
-
 def read_file(graph_file, directed=False, rescale=False, return_edgearray=False, relable_nodes=True, logger=None, **kwargs):
     edgearray = np.loadtxt(graph_file)
 
@@ -288,7 +174,7 @@ def read_file(graph_file, directed=False, rescale=False, return_edgearray=False,
     edgearray[:, -1] = edgearray[:, -1] - min(edgearray[:, -1]) # set earliest timestamp as 0
 
     edges = edgearray[:, :2].astype(np.int) 
-    mask = edges[:, 0] != edges[:, 1] # 自己->自己的边不允许
+    mask = edges[:, 0] != edges[:, 1] # self->self is not allowed
     edges = edges[mask]
     edgearray = edgearray[mask]
     edges = edges.tolist() # mush be a list, or an ajcanency np array
@@ -300,7 +186,6 @@ def read_file(graph_file, directed=False, rescale=False, return_edgearray=False,
         G = nx.Graph(edges)
     
     if rescale:
-        # max_interval = compute_max_interval(edgearray)
         assert kwargs.get('scale', None) is not None
         scale = kwargs['scale']
         timestamps = timestamps / scale
@@ -341,21 +226,6 @@ def read_file(graph_file, directed=False, rescale=False, return_edgearray=False,
     else: 
         return G, embedding_matrix
     
-
-
-def expand_edge_index_timestamp(sub_nodes: torch.LongTensor, sub_edgearray: torch.LongTensor, t: torch.float):
-    index = sub_edgearray[:, 2] <= t
-    exp_edge_index = sub_edgearray[index, :2].to(dtype=torch.int64).T
-    exp_t = sub_edgearray[index, 2]
-
-    loop_index = torch.arange(0, len(sub_nodes), dtype=torch.long, device=t.device).reshape((1, -1)).repeat(2, 1)
-    loop_t = torch.zeros(len(sub_nodes), dtype=torch.float, device=t.device)
-    exp_edge_index = torch.cat([exp_edge_index, loop_index], axis=1)
-    exp_t = torch.cat([exp_t, loop_t], axis=0)
-
-    return exp_edge_index, exp_t
-
-
 
 def get_dataset(G, args):
     if args.model == 'GNPP':
@@ -407,9 +277,6 @@ class SyntheticGenerator(object):
                 And the 'adjacency' for tick should be [N*deg, N*deg]
             p: rewire probability
             seed: random seed
-
-            N, deg, p, seed: args for generate G
-
         """
         self.root = root
         self.N = N
@@ -473,8 +340,6 @@ class SyntheticGenerator(object):
                     else:
                         kernels[i].append(HawkesKernel0())
 
-
-
         hawkes = SimuHawkes(kernels=kernels,
                             baseline=baselines,
                             verbose=False, seed=self.seed)
@@ -510,131 +375,8 @@ class SyntheticGenerator(object):
             in_poi.simulate()
             ts = in_poi.timestamps[0]
             timestamps.append(ts)
-            # for t in in_poi.timestamps[0]:
-            #     edgearray.append([edge[0], edge[1], t])
         
         self.save(timestamps, self.model_name)
-
-
-    def simulate_hawkes_timestamps(self):
-        from tick.hawkes import SimuHawkesExpKernels
-        
-        # edgelabel2index_mapping = dict(zip(self.G_e2n.nodes(), range(self.G_e2n.number_of_nodes()) ) )
-        index2edgelabel_mapping = dict(zip(range(self.G_e2n.number_of_nodes()), self.G_e2n.nodes() ) )
-
-        n_nodes = self.G_e2n.number_of_nodes() # each 'nodes' represents one 'type' for tick0
-        adjacency = nx.adjacency_matrix(self.G_e2n, nodelist=self.G_e2n.nodes).toarray().astype(np.float) * 0.1
-        baseline = 0.1 * np.ones(n_nodes)
-        decays = 5 * np.ones((n_nodes, n_nodes))
-        runtime = 200
-        dt = 0.01
-
-
-        hawkes = SimuHawkesExpKernels(adjacency=adjacency, decays=decays, baseline=baseline, verbose=False, seed=self.seed)
-        hawkes.end_time = runtime
-        hawkes.track_intensity(dt)
-        hawkes.simulate()
-        self.hawkes = hawkes
-
-        file_name = self.root/'Synthetic_hawkes.txt'
-        self.save(hawkes.timestamps, file_name)
-
-        return hawkes.timestamps, (index2edgelabel_mapping, adjacency, baseline, decays)
-
-
-        # timestamps_list = []
-        # for i in range(self.num_instance):
-        #     self.seed = self.seed + i
-        #     hawkes = SimuHawkesExpKernels(adjacency=adjacency, decays=decays, baseline=baseline, verbose=False, seed=self.seed)
-        #     hawkes.end_time = runtime
-        #     # hawkes.track_intensity(dt)
-        #     hawkes.simulate()
-        #     timestamps_list.append(hawkes.timestamps)
-        #     self.hawkes.append(hawkes)
-        # return timestamps_list, (index2edgelabel_mapping, adjacency, baseline, decays)
-    
-    def simulate_2_types(self, model_name):
-        
-        if model_name == 'hawkes_neg':
-            adjacency = np.array([[0.1, -1.0], # important parameter
-                                  [0, 0] ])
-            baseline = np.array([2.0, 0.2]) # important parameter, for syn_neg
-
-        elif model_name == 'hawkes_pos':
-            adjacency = np.array([[0.1, 5.0],
-                                  [0, 0] ])
-            baseline = np.array([0.2, 0.5]) # important parameter, for syn_pos
-
-        
-        decays = 1 * np.ones((2, 2))
-
-        runtime = 20
-        hawkes = SimuHawkesExpKernels(adjacency=adjacency, decays=decays, baseline=baseline, verbose=False, seed=self.seed)
-        hawkes.end_time = runtime
-        hawkes.threshold_negative_intensity(allow=True)
-        hawkes.simulate()
-        timestamps = hawkes.timestamps
-        return timestamps
-
-
-    def generate_indenepdent_subgraphs(self, model_name, instances=1000):
-        """ TODO: directly generate a series of independent subgraphs """
-        self.model_name = model_name
-
-        data_list = []
-        for i in tqdm(range(instances), total=instances):
-            timestamps = self.simulate_2_types(model_name)
-            ts_self = timestamps[0]
-            ts_neig = timestamps[1]
-            if len(ts_self) < 3:
-                # import ipdb; ipdb.set_trace()
-                continue
-
-            e_nodes = [0, 1]
-            e_edge_index = None # not used
-            e_node_target = [0,]
-            e_nodes_exp = [0]*len(ts_self) + [1]*len(ts_neig)
-            e_nodes_ts = np.concatenate(timestamps)
-            nodepair = [0, 1] # original node labels, not used
-            T = ts_self
-
-            # Tensors
-            e_nodes = torch.LongTensor(e_nodes)
-            e_node_target = torch.LongTensor(e_node_target)
-            e_nodes_exp = torch.LongTensor(e_nodes_exp)
-            e_nodes_ts = torch.FloatTensor(e_nodes_ts)
-            T = torch.FloatTensor(T)
-
-
-            data = Data(x=e_nodes, edge_index=e_edge_index, 
-                        e_node_target=e_node_target, e_nodes_exp=e_nodes_exp, 
-                        e_nodes_ts=e_nodes_ts, nodepair=nodepair, T=T) # for likelihood and lambda function in train.py
-            data_list.append(data)
-
-            self.seed = np.random.randint(0, 100000000) # necessary
-        
-        self.save_Data(data_list, self.model_name)
-        print('Valid instances: {}'.format(len(data_list)))
-        # import ipdb; ipdb.set_trace()
-
-
-    def save_Data(self, data_list, model_name):
-        """ directly save as InMemoryDataset collate object """
-        train_num = int(0.75*len(data_list))
-        
-        train_list = data_list[:train_num]
-        test_list = data_list[train_num:]
-
-        train_storage = InMemoryDataset.collate(train_list)
-        test_storage = InMemoryDataset.collate(test_list)
-        train_file_name = self.root/'processed'/'train.pt'
-        test_file_name = self.root/'processed'/'test.pt'
-        
-        torch.save(train_storage, train_file_name)
-        torch.save(test_storage, test_file_name)
-        print('Model {}, graph file {} saved.'.format(model_name, train_file_name))
-        print('Model {}, graph file {} saved.'.format(model_name, test_file_name))
-
 
 
     def save(self, timestamps, model_name):

@@ -16,8 +16,7 @@ time_encoder_dimension=128
 with_neig=1
 desc=he
 
-# rm -rf ./data/${dataset}/processed/*
-
+# rm -rf ./data/${dataset}/processed/* # remove old data
 
 python -m tge.main --model ${model} --num_heads ${num_heads} --dataset ${dataset} --epochs ${epochs} --batch_size=${batch_size} \
 --gpu ${gpu} --optim ${optim} --time_encoder_type ${time_encoder_type} --time_encoder_dimension ${time_encoder_dimension} \
