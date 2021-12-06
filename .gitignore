@@ -16,12 +16,6 @@
 **/*.pdf
 
 
-# generated dataset files
-# e.g.
-**/*.SG
-**/data/
-
-
 # log
 **/log
 
