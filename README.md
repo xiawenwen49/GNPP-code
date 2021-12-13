@@ -135,4 +135,5 @@ We list some of the baselines we used and elaborate our adaptations for these me
 - DySAT, [https://github.com/aravindsankar28/DySAT](https://github.com/aravindsankar28/DySAT)
 
 For three point process models, including THP, SAHP, and NNPP, we could use their default settings. For temporal graphs neural models, including TGAT, TGN, and GHNN, we simplely modify their last output layer from softmax (as they are for multiclass-classification) to a scale output layer, to make them compatible for the focused problem, without affecting their architectures. For embedding based graph models, e.g., DySAT, we use the embedding output of their models (using the temporal graphs before the time poitn of first label timestamp) and train a 2-layer MLP as the predictor for predicting next interaction times.
-
+Note that each of these baselines have their specific input formats, hence a proper format converter is required.
+For example, the tgn requires *u v t label feature* input. The *feature* can be padded with 0 if not exists in datasets, and *label* is set to the target prediction time.
