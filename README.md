@@ -4,13 +4,14 @@
 
 Temporal graphs are ubiquitous data structures in many scenarios, including social networks, user-item interaction networks, etc. In this paper, we focus on predicting the exact time of the next interaction, given a node pair on a temporal graph. This novel problem can support interesting applications, such as time-sensitive items recommendation, congestion prediction on road networks, and many others. We present Graph Neural Point Process (GNPP) to tackle this problem. GNPP relies on the graph neural message passing and the temporal point process framework. Most previous graph neural models devised for temporal/dynamic graphs either utilize the chronological order information or rely on specific point process models, ignoring the exact timestamps and complicated temporal patterns. In GNPP, we adapt a time encoding scheme to map real-valued timestamps of events to a high-dimensional vector space so that the temporal information can be precisely modeled. Further, GNPP considers the structural information of graphs by conducting message passing aggregation on the constructed line graph. The obtained representation defines a neural conditional intensity function that models events' generation mechanisms for predicting future event times of node pairs. We evaluate this model on several synthetic and real-world temporal graphs where it outperforms some recently proposed neural point process models and graph neural models devised for temporal graphs. We further conduct ablation comparisons and visual analyses to shed some light on the learned model and understand the functionality of important components comprehensively.
 
-Figure 1. Interaction counts of node pairs (u, v), (u, k) and (v, k) of a temporal triangle on a temporal graph. We split the time into 100 intervals and count number of interactions at each interval. We can see that interaction counts of (v, k) increases gradually only after some earlier interactions on (u, v) and (u, k), which indicates that interactions on neighbor node pairs may influence the (v, k) itself.
+
 
 ![Image.png](Image.png)
+Figure 1. Interaction counts of node pairs (u, v), (u, k) and (v, k) of a temporal triangle on a temporal graph. We split the time into 100 intervals and count number of interactions at each interval. We can see that interaction counts of (v, k) increases gradually only after some earlier interactions on (u, v) and (u, k), which indicates that interactions on neighbor node pairs may influence the (v, k) itself.
 
+
+![Image.png](Image_framework.png)
 Figure 2. Framework of the GNPP model.
-
-![Image.png](Image%20(2).png)
 
 # Install the module
 
@@ -40,20 +41,20 @@ CollegeMsg: [https://snap.stanford.edu/data/CollegeMsg.html](https://snap.stanfo
 
 > *For the Wikipedia and Reddit dataset, use the data/prepeocessing.py script to process the data files and put them into data/Wikipedia/ and data/Reddit directory correspondingly.*
 
-> *Each dataset should be in the data/DATASET_NAME/DATASET_NAME.txt format.*
+> *Each dataset should have the data/DATASET_NAME/DATASET_NAME.txt format after preprocessing.*
 
 The downloading and preprocessing steps are as follows.
 
 ```other
-# Downloading three data files in the directory, and unzip the CollegeMsg dataset in data/
+# Download three dataset files in the directory data/ first.
 
 cd data/
 mkdir Wikipedia
 mkdir Reddit
 mkdir CollegeMsg
 
-python preprocessing.py --dataset wikipedia
-python preprocessing.py --dataset reddit
+python preprocessing.py --dataset Wikipedia
+python preprocessing.py --dataset Reddit
 
 mv ./Wikipedia.txt ./Wikipedia/Wikipedia.txt
 mv ./Reddit.txt ./Reddit/Reddit.txt
@@ -62,14 +63,14 @@ mv ./CollegeMsg.txt ./CollegeMsg/CollegeMsg.txt
 
 ## Synthetic data generating
 
-The code in tge.test elaborates the SyntheticGenerator class, which generates synthetic datasets used in the paper, as shown below.
+The code in gnpp.test elaborates the SyntheticGenerator class, which generates synthetic datasets used in the paper, as shown below.
 
-```other
+```python
 class TestCase():
     def test_synthetic_generate(self, model_name):
         """ Generate synthetic datasets """
-        from tge.main import ROOT_DIR
-        from tge.utils import SyntheticGenerator
+        from gnpp.main import ROOT_DIR
+        from gnpp.utils import SyntheticGenerator
         
         # model_name = 'poisson' # hawkes_pos, hawkes_neg, poisson,
         root = ROOT_DIR/'data'/f'Synthetic_{model_name}'
@@ -80,7 +81,7 @@ class TestCase():
 For example, to test the poisson dataset generation, simply run
 
 ```other
-python -m tge.test --dataset poisson
+python -m gnpp.test --dataset poisson
 ```
 
 > T*he model_name could be set to hawkes_pos, hawkes_neg, and poisson, i.e., the corresponding three synthetic datasets used in the paper.*
@@ -89,7 +90,7 @@ python -m tge.test --dataset poisson
 
 The running parameters can be set in the run.sh script as follows
 
-```other
+```bash
 dataset=Wikipedia # Wikipedia, Reddit, CollegeMsg, Synthetic_hawkes_neg, Synthetic_hawkes_pos, Synthetic_poisson
 model=GNPP
 batch_size=1
@@ -101,7 +102,7 @@ time_encoder_type=he
 time_encoder_dimension=128
 desc=he
 
-python -m tge.main --model ${model} --num_heads ${num_heads} --dataset ${dataset} --epochs ${epochs} --batch_size=${batch_size} \
+python -m gnpp.main --model ${model} --num_heads ${num_heads} --dataset ${dataset} --epochs ${epochs} --batch_size=${batch_size} \
 --gpu ${gpu} --optim ${optim} --time_encoder_type ${time_encoder_type} --time_encoder_dimension ${time_encoder_dimension} \
 --desc ${desc}
 ```
@@ -112,7 +113,7 @@ To runt the GNPP model, simply type
 ./run.sh
 ```
 
-The tge.main will first extract subgraphs from the original temporal graph as data samples and then train and test the model.
+The gnpp.main will first extract subgraphs from the original temporal graph as data samples and then train and test the model.
 
 Changing the parameters of the script to produce different sections’ results of the paper. For example:
 
@@ -120,7 +121,7 @@ Setting the *dataset* parameter in the script to produce results in the Section 
 
 Setting the *with_neig* to 1 or 0 to produce the comparisons in Section 4.5 of the paper.
 
-More details please refer to the settings in src/tge/main.py of the source code.
+More details please refer to the settings in src/gnpp/main.py of the source code.
 
 # Other baselines
 

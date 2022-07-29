@@ -1,5 +1,4 @@
 import argparse
-import os
 import numpy as np
 
 def preprocessing(dataset):
@@ -14,7 +13,7 @@ def preprocessing(dataset):
     print(f'data file: {data_file}.')
     print(f'processed file: {new_file}.')
     data = np.loadtxt(data_file, skiprows=1, delimiter=',')
-    import ipdb; ipdb.set_trace()
+    # import ipdb; ipdb.set_trace()
     data = data[:, :3]
     max_u = np.max(data[:, 0])+1
     data[:, 1] = data[:, 1] + max_u

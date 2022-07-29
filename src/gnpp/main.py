@@ -4,10 +4,11 @@ import os
 import time
 import warnings
 from pathlib import Path
-from . import log
-from . import utils
-from .model import get_model
-from .train import train_model
+
+from gnpp.utils_ext.log import set_up_log
+from gnpp.utils import read_file, get_dataset, get_dataloader
+from gnpp.model import get_model
+from gnpp.train import train_model
 
 warnings.filterwarnings("ignore", message=r"Passing", category=FutureWarning)
 ROOT_DIR = Path(os.path.dirname(os.path.abspath(__file__)) ).parent.parent
@@ -86,16 +87,16 @@ def main():
     # arg and log settings
     args = parse_args()
     sys_argv = sys.argv
-    logger = log.set_up_log(args, sys_argv)
+    logger = set_up_log(args, sys_argv)
 
     # read in dataset
     graph_file = Path(args.datadir) / args.dataset / (args.dataset + '.txt')
     relable_nodes = False if args.dataset == 'Synthetic' else True
-    G, embedding_matrix = utils.read_file(graph_file, relable_nodes=relable_nodes) # read graph
+    G, embedding_matrix = read_file(graph_file, relable_nodes=relable_nodes) # read graph
 
     # dataloaders
-    train_set, val_set, test_set = utils.get_dataset(G, args)
-    dataloaders = utils.get_dataloader(train_set, val_set, test_set, args)
+    train_set, val_set, test_set = get_dataset(G, args)
+    dataloaders = get_dataloader(train_set, val_set, test_set, args)
     
 
     # build model

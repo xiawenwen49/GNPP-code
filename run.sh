@@ -10,7 +10,7 @@ time_encoder_dimension=128
 desc=he
 with_neig=1
 
-python -m tge.main --model ${model} --num_heads ${num_heads} --dataset ${dataset} --epochs ${epochs} --batch_size=${batch_size} \
+python -m gnpp.main --model ${model} --num_heads ${num_heads} --dataset ${dataset} --epochs ${epochs} --batch_size=${batch_size} \
 --gpu ${gpu} --optim ${optim} --time_encoder_type ${time_encoder_type} --time_encoder_dimension ${time_encoder_dimension} \
 --with_neig ${with_neig} --desc ${desc}
 

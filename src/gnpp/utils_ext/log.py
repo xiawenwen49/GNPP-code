@@ -32,10 +32,10 @@ def set_up_log(args, sys_argv):
 
     logger.info('Command line executed: python ' + ' '.join(sys_argv))
     logger.info('-'*40)
-    # logger.info('Full args parsed:')
-    print(vars(args))
-    # for key, value in vars(args).items():
-        # logger.info('{}={}'.format(key, value))
+    logger.info('Full args parsed:')
+    # print(vars(args))
+    for key, value in vars(args).items():
+        logger.info('{}={}'.format(key, value))
     logger.info('-'*40)
 
     return logger

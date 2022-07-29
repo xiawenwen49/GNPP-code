@@ -1,14 +1,12 @@
 from setuptools import setup
 from setuptools import find_packages
 
-setup(name='tgnn',
+setup(name='gnpp',
       version='0.1',
-      description='tgnn for temporal graphs applications',
+      description='GNPP for temporal graph prediction',
       author='Xia Wenwen',
       author_email='xiawenwen@sjtu.edu.cn',
       license='MIT',
       package_dir={'': 'src/'},
-      packages=['dtgnn', 'tge'],
+      packages=['gnpp'],
       zip_safe=False)
-
-# packages=find_packages('src/python'),

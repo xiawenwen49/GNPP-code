@@ -113,7 +113,6 @@ class GNPPDataset(InMemoryDataset):
 
 class GNNDatatset(GNPPDataset):
     """ For GNN adaptation
-
     1. extract a subgraph enclosing an edge. 
     2, regard edges as nodes, it should be a star graph (for 1-hop subgraph).
     3. rename all nodes in a subgraph from 0 to |subgraph.nodes|.
@@ -163,8 +162,6 @@ class GNNDatatset(GNPPDataset):
             # import ipdb; ipdb.set_trace()
             data_list.append(data)
         return data_list
-
-
 
 
 def read_file(graph_file, directed=False, rescale=False, return_edgearray=False, relable_nodes=True, logger=None, **kwargs):

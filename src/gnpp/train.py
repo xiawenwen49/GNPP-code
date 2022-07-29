@@ -4,8 +4,8 @@ import pandas as pd
 from pathlib import Path
 from tqdm import tqdm
 from torch_geometric.data import Data
-from xww.utils.training import get_device, get_model_device, get_optimizer, Recorder
-from xww.utils.multiprocessing import MultiProcessor
+from gnpp.utils_ext.training import get_device, get_model_device, get_optimizer, Recorder
+from gnpp.utils_ext.multiprocessing import MultiProcessor
 
 
 def soft_plus(phi, x):
@@ -56,7 +56,8 @@ def criterion(model, batch, **kwargs):
     # time mse
     time_error = torch.mean(torch.square(pred[:-1] - intervals))
     
-    loss = nll + 0.001 * time_error
+    loss = 0.1 * nll + time_error
+    # import ipdb; ipdb.set_trace()
     return loss, -nll, time_error
 
 def criterion_gnn(model, batch, **kwargs):
@@ -171,30 +172,17 @@ def evaluate_epoch(model, test_loader, args, logger, **kwargs):
 def train_model(model, dataloaders, args, logger):
     train_loader, val_loader, test_loader = dataloaders
     optimizer = get_optimizer(model, args.optim, args.lr, args.l2)
-    recorder = Recorder({'loss': 0}, args.checkpoint_dir, args.dataset, args.time_str)
+    recorder = Recorder({'loss': 0}, args.checkpoint_dir, args.dataset, args.time_str, args=args)
     for i in range(args.epochs):
         train_results = optimize_epoch(model, optimizer, train_loader, args, logger, epoch=i)
         recorder.save_model(model, i=i)
         eval_results = evaluate_epoch(model, test_loader, args, logger, epoch=i)
         
-        recorder.append_full_metrics(train_results, 'train')
-        recorder.append_full_metrics(eval_results, 'test')
+        recorder.append_metrics(train_results, 'train')
+        recorder.append_metrics(eval_results, 'test')
         recorder.save_record()
 
         logger.info(f" [ Epoch {i} ] ")
         logger.info(f"   - (training)    loss: {train_results['loss']:.5f}    rmse: {train_results['rmse']:.5f}    ll: {train_results['ll']:.5f}")
         logger.info(f"   - (testing.)    loss: {eval_results['loss']:.5f}    rmse: {eval_results['rmse']:.5f}    ll: {eval_results['ll']:.5f}")
-    # logger.info(f"   - (best res)    loss: {eval_results['loss']:.6f}    rmse: {eval_results['rmse']:.5f}    abs_ratio: {eval_results['abs_ratio']:.5f}")
-        
-        
-    logger.info(f"Training finished, best test loss: , best test rmse: , btest abs_ratio: ")
-
-
-
-
-
-
-
-
-
-
+    print('Finished.')

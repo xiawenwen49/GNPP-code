@@ -87,7 +87,6 @@ class GNPP(nn.Module):
     """
     `GNPP` model
     Devised for edge2node graph data.
-    Each data sample should be a star graph, each node represents an edge on original graph. 
     Node timestamps are edge(node pair) timestamps on original graph
     """
     def __init__(self, G, time_encoder_args, num_heads, dropout, **kwargs):
@@ -163,7 +162,7 @@ def get_model(G, embedding_matrix, args, logger):
     if args.model == 'GNPP':
         model = GNPP(G, args.time_encoder_args, args.num_heads, args.dropout, with_neig=args.with_neig)
     elif args.model in ['GAT', 'GraphSAGE']:
-        from xww.utils.models import GNNModel
+        from gnpp.utils_ext.models import GNNModel
         model = GNNModel(args.model, args.layers, args.in_channels, args.hidden_channels, out_features=1, set_indice_size=1, dropout=args.dropout)
     else:
         raise NotImplementedError("Not implemented now")
