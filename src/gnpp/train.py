@@ -56,7 +56,7 @@ def criterion(model, batch, **kwargs):
     # time mse
     time_error = torch.mean(torch.square(pred[:-1] - intervals))
     
-    loss = 0.1 * nll + time_error
+    loss = nll + time_error
     # import ipdb; ipdb.set_trace()
     return loss, -nll, time_error
 
