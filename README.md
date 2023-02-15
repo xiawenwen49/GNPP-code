@@ -31,9 +31,12 @@ We use both real-world datasets and synthetic dataset. The downloading and prepr
 
 The three real-world datasets we used can be found in the following links.
 
-Wikipedia: [https://drive.google.com/file/d/1Gt9YvAlDAVgzw8exqSRIn_lucXHDM26q/view?usp=sharing](https://drive.google.com/file/d/1Gt9YvAlDAVgzw8exqSRIn_lucXHDM26q/view?usp=sharing).
+Wikipedia: <del>[https://drive.google.com/file/d/1Gt9YvAlDAVgzw8exqSRIn_lucXHDM26q/view?usp=sharing](https://drive.google.com/file/d/1Gt9YvAlDAVgzw8exqSRIn_lucXHDM26q/view?usp=sharing).</del>
+[http://snap.stanford.edu/jodie/wikipedia.csv](http://snap.stanford.edu/jodie/wikipedia.csv).
 
-Reddit: [https://drive.google.com/file/d/1LO_nsKewY_fI_94-yrMzZ4Y03duVDrRa/view?usp=sharing](https://drive.google.com/file/d/1LO_nsKewY_fI_94-yrMzZ4Y03duVDrRa/view?usp=sharing)
+
+Reddit: <del>[https://drive.google.com/file/d/1LO_nsKewY_fI_94-yrMzZ4Y03duVDrRa/view?usp=sharing](https://drive.google.com/file/d/1LO_nsKewY_fI_94-yrMzZ4Y03duVDrRa/view?usp=sharing).</del>
+[http://snap.stanford.edu/jodie/reddit.csv](http://snap.stanford.edu/jodie/reddit.csv).
 
 CollegeMsg: [https://snap.stanford.edu/data/CollegeMsg.html](https://snap.stanford.edu/data/CollegeMsg.html).
 
